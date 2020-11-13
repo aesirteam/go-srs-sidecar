@@ -1,28 +1,13 @@
 package common
 
 import (
-	"github.com/caarlos0/env/v6"
 	"github.com/fsnotify/fsnotify"
-	log "github.com/sirupsen/logrus"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 )
-
-type Watcher struct {
-	CustomConfig
-	LocalFileSystem
-}
-
-func init() {
-	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
-
-	log.SetOutput(os.Stdout)
-
-	//log.SetLevel(log.WarnLevel)
-}
 
 //func fileDiff(path, md5Old string) (b bool, md5Sum string) {
 //	md5Sum = md5Old
@@ -53,15 +38,13 @@ func removeExpireFile(root string, ttl int64) {
 	})
 }
 
-func NewWatcher() *Watcher {
-	w := Watcher{}
-	if err := env.Parse(&w); err != nil {
-		return nil
+func NewWatcher() *LocalFileSystem {
+	return &LocalFileSystem{
+		CustomConfig: Conf,
 	}
-	return &w
 }
 
-func (w *Watcher) ConfigFile(authEnc string) {
+func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 	//var md5Sum	string
 	//
 	//reload := func() error {
@@ -93,7 +76,7 @@ func (w *Watcher) ConfigFile(authEnc string) {
 			Method: "GET",
 			URL: &url.URL{
 				Scheme:   "http",
-				Host:     w.SrsApiServer,
+				Host:     fs.SrsApiServer,
 				Path:     "/api/v1/raw",
 				RawQuery: "rpc=reload&scope=configmap",
 			},
@@ -109,15 +92,15 @@ func (w *Watcher) ConfigFile(authEnc string) {
 	}
 
 	//first
-	reload()
+	_ = reload()
 
 	if watcher, err := fsnotify.NewWatcher(); err == nil {
 		defer watcher.Close()
 
-		path := w.SrsCfgFile
+		path := fs.SrsCfgFile
 
 		if path, err = filepath.Abs(path); err != nil {
-			log.Warn("Watcher[ConfigFile]: ", err.Error())
+			Logger.Warn("Watcher[ConfigFile]: ", err.Error())
 			return
 		}
 
@@ -133,11 +116,11 @@ func (w *Watcher) ConfigFile(authEnc string) {
 					//	reload()
 					//}
 					if event.Op&fsnotify.CloseWrite == fsnotify.CloseWrite {
-						reload()
+						_ = reload()
 					}
 				case err, ok := <-watcher.Errors:
 					if !ok {
-						log.Warn("Watcher[ConfigFile]: ", err.Error())
+						Logger.Warn("Watcher[ConfigFile]: ", err.Error())
 						return
 					}
 				}
@@ -145,18 +128,18 @@ func (w *Watcher) ConfigFile(authEnc string) {
 		}()
 
 		if err = watcher.Add(path); err != nil {
-			log.Warn("Watcher[ConfigFile]: ", err.Error())
+			Logger.Warn("Watcher[ConfigFile]: ", err.Error())
 			return
 		}
 
-		log.Info("Watcher[ConfigFile]: ", "started")
+		Logger.Info("Watcher[ConfigFile]: ", "started")
 		<-done
 	}
 }
 
-func (w *Watcher) MediaFile(root string) {
+func (fs *LocalFileSystem) MediaFile(root string) {
 	if len(root) == 0 {
-		root = w.SrsHlsPath
+		root = fs.SrsHlsPath
 	}
 
 	if watcher, err := fsnotify.NewWatcher(); err == nil {
@@ -186,22 +169,22 @@ func (w *Watcher) MediaFile(root string) {
 					}
 					if event.Op&fsnotify.Create == fsnotify.Create {
 						if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-							watcher.Add(event.Name)
+							_ = watcher.Add(event.Name)
 						}
 					}
 					if event.Op&fsnotify.CloseWrite == fsnotify.CloseWrite {
-						removeExpireFile(filepath.Dir(event.Name), w.SrsHlsExpire)
+						removeExpireFile(filepath.Dir(event.Name), fs.SrsHlsExpire)
 					}
 				case err, ok := <-watcher.Errors:
 					if !ok {
-						log.Warn("Watcher[MediaFile]: ", err.Error())
+						Logger.Warn("Watcher[MediaFile]: ", err.Error())
 						return
 					}
 				}
 			}
 		}()
 
-		log.Info("Watcher[MediaFile]: ", "started")
+		Logger.Info("Watcher[MediaFile]: ", "started")
 		<-done
 	}
 }

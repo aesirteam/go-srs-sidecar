@@ -6,22 +6,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"github.com/FZambia/sentinel"
-	"github.com/caarlos0/env/v6"
 	"github.com/gomodule/redigo/redis"
-	jsoniter "github.com/json-iterator/go"
-	log "github.com/sirupsen/logrus"
+	"github.com/json-iterator/go"
 	"math"
 	"math/rand"
 	"net/url"
-	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 )
 
 type RedisPool struct {
-	CustomConfig
-
+	once     sync.Once
 	sliceIdx int
 }
 
@@ -43,8 +40,6 @@ type UserInfo struct {
 	TokenExpire int64
 }
 
-type UserInfoBody map[string]interface{}
-
 type StreamInfo struct {
 	Users []string
 	StreamDesc
@@ -63,20 +58,9 @@ type StreamMeta struct {
 	ClusterOrigin []byte
 }
 
-type ClusterOriginBody map[string]map[string]interface{}
-
 var (
 	pool []*redis.Pool
-	json = jsoniter.ConfigCompatibleWithStandardLibrary
 )
-
-func init() {
-	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
-
-	log.SetOutput(os.Stdout)
-
-	//log.SetLevel(log.WarnLevel)
-}
 
 func EncodeUserToken(user, password, nonce string) string {
 	if len(nonce) == 0 {
@@ -94,44 +78,47 @@ func EncodeUserToken(user, password, nonce string) string {
 
 func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 	s.once.Do(func() {
-		if err := env.Parse(s); err != nil {
-			return
-		}
 		sntnl := &sentinel.Sentinel{
-			Addrs:      []string{s.SentinelHost + ":" + strconv.Itoa(s.SentinelPort)},
-			MasterName: s.MasterName,
+			Addrs:      []string{Conf.SentinelHost + ":" + strconv.Itoa(Conf.SentinelPort)},
+			MasterName: Conf.MasterName,
 			Dial: func(addr string) (redis.Conn, error) {
 				c, err := redis.Dial("tcp", addr)
 				if err != nil {
+					Logger.Fatal(err)
 					return nil, err
 				}
 				return c, nil
 			},
 		}
 
+		dialDatabase, dialPassword := redis.DialDatabase(Conf.Database), redis.DialPassword(Conf.Password)
 		//init master pool
 		masterAddr, err := sntnl.MasterAddr()
 		if err != nil {
+			Logger.Fatal(err)
 			return
 		}
 
 		pool = append(pool, &redis.Pool{
-			MaxIdle:     s.MaxIdle,
-			MaxActive:   s.MaxActive,
+			MaxIdle:     Conf.MaxIdle,
+			MaxActive:   Conf.MaxActive,
 			IdleTimeout: 240 * time.Second,
 			Wait:        true,
 			Dial: func() (redis.Conn, error) {
-				c, err := redis.Dial("tcp", masterAddr, redis.DialDatabase(s.Database), redis.DialPassword(s.Password))
+				c, err := redis.Dial("tcp", masterAddr, dialDatabase, dialPassword)
 				if err != nil {
+					Logger.Fatal(err)
 					return nil, err
 				}
 				return c, nil
 			},
-			TestOnBorrow: func(c redis.Conn, t time.Time) error {
+			TestOnBorrow: func(c redis.Conn, t time.Time) (err error) {
 				if time.Since(t) < time.Minute {
-					return nil
+					return
 				}
-				_, err := c.Do("PING")
+				if _, err := c.Do("PING"); err != nil {
+					Logger.Fatal(err)
+				}
 				return err
 			},
 		})
@@ -139,27 +126,31 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 		//init slaves pool
 		slaveAddrs, err := sntnl.SlaveAddrs()
 		if err != nil {
+			Logger.Fatal(err)
 			return
 		}
 
 		for _, addr := range slaveAddrs {
 			pool = append(pool, &redis.Pool{
-				MaxIdle:     s.MaxIdle,
-				MaxActive:   s.MaxActive,
+				MaxIdle:     Conf.MaxIdle,
+				MaxActive:   Conf.MaxActive,
 				IdleTimeout: 240 * time.Second,
 				Wait:        true,
 				Dial: func() (redis.Conn, error) {
-					c, err := redis.Dial("tcp", addr, redis.DialDatabase(s.Database), redis.DialPassword(s.Password))
+					c, err := redis.Dial("tcp", addr, dialDatabase, dialPassword)
 					if err != nil {
+						Logger.Fatal(err)
 						return nil, err
 					}
 					return c, nil
 				},
-				TestOnBorrow: func(c redis.Conn, t time.Time) error {
+				TestOnBorrow: func(c redis.Conn, t time.Time) (err error) {
 					if time.Since(t) < time.Minute {
-						return nil
+						return
 					}
-					_, err := c.Do("PING")
+					if _, err := c.Do("PING"); err != nil {
+						Logger.Fatal(err)
+					}
 					return err
 				},
 			})
@@ -288,7 +279,11 @@ func (s *RedisPool) RefreshToken(info *UserInfo, ttl int64) (err error) {
 	client := pool.Get()
 	defer release(client)
 
-	if obj, err := json.Marshal(UserInfoBody{
+	if ttl == 0 {
+		ttl = Conf.DefaultTokenExpire
+	}
+
+	if obj, err := jsoniter.Marshal(map[string]interface{}{
 		"password": info.Password,
 		"token":    info.Token,
 		"expire":   time.Now().Unix() + ttl,
@@ -302,9 +297,9 @@ func (s *RedisPool) RefreshToken(info *UserInfo, ttl int64) (err error) {
 func (s *RedisPool) InitAdminUser() string {
 	if err := s.AddUser(&UserInfo{
 		Account:  "admin",
-		Password: s.DefaultAdminPasswd,
+		Password: Conf.DefaultAdminPasswd,
 	}); err != nil {
-		log.Warn(err.Error())
+		Logger.Warn(err.Error())
 	}
 
 	if info, err := s.GetUserInfo("admin"); err == nil {
@@ -364,18 +359,19 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 			goto Error401
 		}
 
-		ttl := s.DefaultTokenExpire
+		ttl := int64(0)
 
 		if e.Action == "on_publish" {
 			ttl = 3600 * 24 * 365
+
 			go func() {
-				ch := make(chan string)
+				ch := make(chan string, 1)
 				defer close(ch)
 
 				//execCommand(ch, "hostname", "-f")
 				execCommand(ch, "hostname", "-i")
 
-				if streamInfo.Meta.ClusterOrigin, err = json.Marshal(ClusterOriginBody{
+				if streamInfo.Meta.ClusterOrigin, err = jsoniter.Marshal(map[string]map[string]interface{}{
 					"query": {
 						"ip":     e.Ip,
 						"vhost":  e.Vhost,
@@ -431,16 +427,11 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 			}
 
 			if !isOwner {
-				s.RefreshToken(userInfo, s.DefaultTokenExpire)
+				s.RefreshToken(userInfo, 0)
 			}
 		}
 
-		var body ClusterOriginBody
-		if err := json.Unmarshal(streamInfo.Meta.ClusterOrigin, &body); err != nil {
-			goto Error500
-		}
-
-		originIp = body["origin"]["ip"].(string)
+		originIp = jsoniter.Get(streamInfo.Meta.ClusterOrigin, "origin", "ip").ToString()
 	default:
 		err = errors.New(`Action '` + e.Action + `' fail`)
 		goto Error500
@@ -489,14 +480,13 @@ func (s *RedisPool) GetUsers(accounts []string) (result []UserInfo, err error) {
 	//receive from redis
 	for _, name := range accounts {
 		if v, err := redis.Bytes(client.Receive()); err == nil {
-			var body UserInfoBody
-			if err := json.Unmarshal(v, &body); err == nil {
+			if body := jsoniter.Get(v); body.LastError() == nil {
 				result = append(result, UserInfo{
 					Account:     name,
-					Password:    body["password"].(string),
+					Password:    body.Get("password").ToString(),
 					Exists:      true,
-					Token:       body["token"].(string),
-					TokenExpire: int64(body["expire"].(float64)),
+					Token:       body.Get("token").ToString(),
+					TokenExpire: body.Get("expire").ToInt64(),
 				})
 			}
 		}
@@ -517,15 +507,7 @@ func (s *RedisPool) AddUser(info *UserInfo) (err error) {
 		return
 	}
 
-	pool, err := s.getPool("master")
-	if err != nil {
-		return
-	}
-
-	client := pool.Get()
-	defer release(client)
-
-	password := func() string {
+	info.Password = func() string {
 		if len(info.Password) == 0 {
 			b := make([]byte, 16)
 			for i := range b {
@@ -536,15 +518,9 @@ func (s *RedisPool) AddUser(info *UserInfo) (err error) {
 		return info.Password
 	}()
 
-	if obj, err := json.Marshal(UserInfoBody{
-		"password": password,
-		"token":    EncodeUserToken(info.Account, password, ""),
-		"expire":   time.Now().Unix() + s.DefaultTokenExpire,
-	}); err == nil {
-		_, err = client.Do("HSET", "users", info.Account, obj)
-	}
+	info.Token = EncodeUserToken(info.Account, info.Password, "")
 
-	return
+	return s.RefreshToken(info, 0)
 }
 
 func (s *RedisPool) DeleteUser(account string) (err error) {

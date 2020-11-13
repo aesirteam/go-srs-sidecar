@@ -3,6 +3,7 @@ package routes
 import (
 	"github.com/aesirteam/go-srs-sidecar/common"
 	"github.com/gin-gonic/gin"
+	"github.com/json-iterator/go"
 	"net/http"
 	"path/filepath"
 )
@@ -27,10 +28,7 @@ func (a *WebHookRouter) Run(addr string) {
 		if ext := filepath.Ext(c.Request.URL.Path); ext == ".m3u8" || ext == ".ts" {
 			fs := common.LocalFileSystem{}
 
-			path, _ := common.GetHlsFilePath(c.Request.URL.Path)
-			path = "/home/zhongkui/dev/github/srs/trunk/objs/nginx/html" + c.Request.URL.Path
-
-			if err := fs.Open(path); err != nil {
+			if err := fs.Open(common.Conf.SrsHlsPath + c.Request.URL.Path); err != nil {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
 			}
@@ -38,7 +36,7 @@ func (a *WebHookRouter) Run(addr string) {
 
 			c.Writer.Header().Set("Content-Type", "apication/vnd.apple.mpegurl")
 			c.Writer.WriteHeader(http.StatusOK)
-			fs.WriteTo(c.Writer)
+			_, _ = fs.WriteTo(c.Writer)
 
 			return
 		}
@@ -84,10 +82,10 @@ func (a *WebHookRouter) Run(addr string) {
 
 	api.POST("/clusters", func(c *gin.Context) {
 		key := common.STREAM_PREFIX + c.DefaultQuery("vhost", common.DEFAULT_VHOST) + "/" + c.Query("app") + "/" + c.Query("stream")
+
 		if info, err := a.RedisPool.GetStreamInfo(key); err == nil {
-			var body common.ClusterOriginBody
-			if err := json.Unmarshal(info.Meta.ClusterOrigin, &body); err == nil {
-				c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0, "data": body})
+			if body := jsoniter.Get(info.Meta.ClusterOrigin); body.LastError() == nil {
+				c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0, "data": body.GetInterface()})
 				return
 			}
 		}
@@ -98,7 +96,7 @@ func (a *WebHookRouter) Run(addr string) {
 	api.GET("/configmap", func(c *gin.Context) {
 		fs := common.LocalFileSystem{}
 
-		if err := fs.Open(common.GetCfgFilePath()); err != nil {
+		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
@@ -106,10 +104,10 @@ func (a *WebHookRouter) Run(addr string) {
 
 		c.Writer.Header().Set("Content-Type", "application/octet-stream")
 		c.Writer.WriteHeader(http.StatusOK)
-		fs.WriteTo(c.Writer)
+		_, _ = fs.WriteTo(c.Writer)
 	})
 
-	engine.Run(addr)
+	_ = engine.Run(addr)
 }
 
 func (a *WebHookRouter) Destory() {

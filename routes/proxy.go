@@ -10,13 +10,13 @@ type ProxyRouter struct{}
 func (a *ProxyRouter) Run(addr string) {
 	//Start file watch
 	watcher := common.NewWatcher()
-	go watcher.MediaFile("./public1")
+	go watcher.MediaFile("")
 
 	engine.Use(func(c *gin.Context) {
-		c.Set("proxyHost", "127.0.0.1:8090;remote")
+		c.Set("proxyHost", watcher.SrsProxyHost+";remote")
 	}, writeHandlerFunc)
 
-	engine.Run(addr)
+	_ = engine.Run(addr)
 }
 
 func (a *ProxyRouter) Destory() {

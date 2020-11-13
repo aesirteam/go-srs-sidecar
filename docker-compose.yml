@@ -1,0 +1,96 @@
+version: "3"
+
+services:
+  origin:
+    image: hub.bigdatagz.com/ossrs/srs:v4.0
+    restart: always
+    volumes:
+      - ./conf/origin.conf:/usr/local/srs/conf/srs.conf
+      - hls-data:/usr/local/srs/objs/nginx/html
+    networks:
+      - overlay
+    ports:
+      - 19350:1935
+
+  origin-sidecar:
+    image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
+    restart: always
+    environment:
+      - redis_sentinel_host=
+      - redis_pass=
+      - redis_database=
+      - redis_pool_min=
+      - redis_pool_max=
+      - DEFAULT_ADMIN_PASSWORD=
+
+      - SRS_API_SERVER=origin:1985
+    volumes:
+      - ./conf/origin.conf:/app/conf/srs.conf
+      - hls-data:/app/public
+    networks:
+      - overlay
+    command:
+      - webhook
+    depends_on:
+      - origin
+
+  edge:
+    image: hub.bigdatagz.com/ossrs/srs:v4.0
+    restart: always
+    volumes:
+      - ./conf/edge.conf:/usr/local/srs/conf/srs.conf
+    networks:
+      - overlay
+    ports:
+      - 1935:1935
+
+  edge-sidecar:
+    image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
+    restart: always
+    environment:
+      - redis_sentinel_host=
+      - redis_pass=
+      - redis_database=
+      - redis_pool_min=
+      - redis_pool_max=
+      - DEFAULT_ADMIN_PASSWORD=
+
+      - SRS_API_SERVER=edge:1985
+    volumes:
+      - ./conf/edge.conf:/app/conf/srs.conf
+    networks:
+      - overlay
+    ports:
+      - 8080:8080
+    depends_on:
+      - edge
+
+  proxy:
+    image: hub.bigdatagz.com/ossrs/srs:v4.0
+    restart: always
+    volumes:
+      - ./conf/proxy.conf:/usr/local/srs/conf/srs.conf
+    networks:
+      - overlay
+    ports:
+      - 19351:1935
+
+  proxy-sidecar:
+    image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
+    restart: always
+    environment:
+      - SRS_PROXY_HOST=192.168.1.150:8080
+    networks:
+      - overlay
+    ports:
+      - 8082:8080
+    command:
+      - proxy
+    depends_on:
+      - proxy
+
+networks:
+  overlay:
+
+volumes:
+  hls-data:

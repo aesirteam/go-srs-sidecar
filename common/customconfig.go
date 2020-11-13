@@ -1,6 +1,35 @@
 package common
 
-import "sync"
+import (
+	"github.com/caarlos0/env/v6"
+	"github.com/sirupsen/logrus"
+	"os"
+)
+
+const (
+	LETTER_BYTES  = "abcdefghijklmnopqrstuvwxyz0123456789"
+	PASSWD_BYTES  = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNpPqQrRsStTuUvVwWxXyYzZ123456789"
+	STREAM_PREFIX = "stream:"
+	DEFAULT_VHOST = "__defaultVhost__"
+)
+
+var (
+	Logger = logrus.Logger{
+		Out:          os.Stderr,
+		Formatter:    &logrus.TextFormatter{FullTimestamp: true},
+		Level:        logrus.InfoLevel,
+		ExitFunc:     os.Exit,
+		ReportCaller: false,
+	}
+
+	Conf = CustomConfig{}
+)
+
+func init() {
+	if err := env.Parse(&Conf); err != nil {
+		Logger.Fatal(err)
+	}
+}
 
 type CustomConfig struct {
 	SentinelHost string `env:"redis_sentinel_host" envDefault:"127.0.0.1"`
@@ -26,13 +55,5 @@ type CustomConfig struct {
 	SrsCfgFile   string `env:"SRS_CONF_FILE" envDefault:"./conf/srs.conf"`
 	SrsHlsPath   string `env:"SRS_HLS_PATH" envDefault:"./public"`
 	SrsHlsExpire int64  `env:"SRS_HLS_EXPIRE" envDefault:"60"`
-
-	once sync.Once
+	SrsProxyHost string `env:"SRS_PROXY_HOST" envDefault:"127.0.0.1:8080"`
 }
-
-const (
-	LETTER_BYTES  = "abcdefghijklmnopqrstuvwxyz0123456789"
-	PASSWD_BYTES  = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNpPqQrRsStTuUvVwWxXyYzZ123456789"
-	STREAM_PREFIX = "stream:"
-	DEFAULT_VHOST = "__defaultVhost__"
-)

@@ -2,34 +2,29 @@ package common
 
 import (
 	"context"
-	"github.com/caarlos0/env/v6"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"strconv"
 )
 
-type S3Client struct {
-	CustomConfig
-}
+type S3Client struct{}
 
 func (c *S3Client) getClient() (*minio.Client, error) {
-	c.once.Do(func() {
-		if err := env.Parse(c); err != nil {
-			return
-		}
-	})
-
-	return minio.New(c.Endpoint+":"+strconv.Itoa(c.Port), &minio.Options{
-		Creds:  credentials.NewStaticV4(c.AccessKeyID, c.SecretAccessKey, ""),
-		Secure: c.UseSSL,
-	})
+	return minio.New(
+		Conf.Endpoint+":"+strconv.Itoa(Conf.Port),
+		&minio.Options{
+			Creds:  credentials.NewStaticV4(Conf.AccessKeyID, Conf.SecretAccessKey, ""),
+			Secure: Conf.UseSSL,
+		},
+	)
 }
 
 func (c *S3Client) FPutObject(ch chan int, objectName, filePath string) {
 	if client, err := c.getClient(); err == nil {
-		if _, err := client.FPutObject(context.Background(),
-			c.BucketName,
-			c.BucketPrefix+objectName,
+		if _, err := client.FPutObject(
+			context.Background(),
+			Conf.BucketName,
+			Conf.BucketPrefix+objectName,
 			filePath,
 			minio.PutObjectOptions{},
 		); err == nil {
@@ -47,5 +42,10 @@ func (c *S3Client) GetObject(objectName string) (*minio.Object, error) {
 		return nil, err
 	}
 
-	return client.GetObject(context.Background(), c.BucketName, c.BucketPrefix+objectName, minio.GetObjectOptions{})
+	return client.GetObject(
+		context.Background(),
+		Conf.BucketName,
+		Conf.BucketPrefix+objectName,
+		minio.GetObjectOptions{},
+	)
 }

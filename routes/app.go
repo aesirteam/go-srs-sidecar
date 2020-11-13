@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"github.com/aesirteam/go-srs-sidecar/common"
 	"github.com/gin-gonic/gin"
-	jsoniter "github.com/json-iterator/go"
 	"io"
 	"net/http"
 	"os"
@@ -16,7 +15,6 @@ var (
 	engine   = gin.New()
 	regexpTs = regexp.MustCompile(`.ts`)
 	regexpFn = regexp.MustCompile(`^(\w+)`)
-	json     = jsoniter.ConfigCompatibleWithStandardLibrary
 )
 
 type App interface {
@@ -38,13 +36,14 @@ func parseHeaderAuthorization(authEnc string) (string, string) {
 }
 
 func writeHandlerFunc(c *gin.Context) {
-	transformFile := func(path string, fs common.FileSystem) (err error) {
-		if err = fs.Open(path); err != nil {
+	transformFile := func(path string, fs common.FileSystem) {
+		if err := fs.Open(path); err != nil {
 			return
 		}
 		defer fs.Close()
 
 		var (
+			err     error
 			readLen int
 			buf     = make([]byte, 4096)
 		)
@@ -63,13 +62,13 @@ func writeHandlerFunc(c *gin.Context) {
 
 			if strings.HasSuffix(path, ".m3u8") {
 				if c.Request.Header.Get("proxyMode") == "remote" {
-					c.Writer.Write(buf[:readLen])
+					_, err = c.Writer.Write(buf[:readLen])
 				} else {
-					c.Writer.Write(regexpTs.ReplaceAll(buf[:readLen], []byte(".ts?"+c.Request.URL.RawQuery)))
+					_, err = c.Writer.Write(regexpTs.ReplaceAll(buf[:readLen], []byte(".ts?"+c.Request.URL.RawQuery)))
 				}
 			} else if strings.HasSuffix(path, ".ts") {
-				c.Writer.Write(buf[:readLen])
-				fs.Write(buf[:readLen])
+				_, err = c.Writer.Write(buf[:readLen])
+				_, err = fs.Write(buf[:readLen])
 			}
 
 			c.Writer.(http.Flusher).Flush()
@@ -78,7 +77,9 @@ func writeHandlerFunc(c *gin.Context) {
 		return
 	}
 
-	if path, err := common.GetHlsFilePath(c.Request.URL.Path); os.IsNotExist(err) && len(path) > 0 {
+	path := common.Conf.SrsHlsPath + c.Request.URL.Path
+
+	if _, err := os.Stat(c.Request.URL.Path); os.IsNotExist(err) {
 		transformFile(path, &common.HttpFileSystem{
 			Req: func(host string) *http.Request {
 				c.Request.URL.Scheme = "http"

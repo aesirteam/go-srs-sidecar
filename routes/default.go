@@ -34,7 +34,7 @@ func (a *DefaultRouter) basicAuth(isAdmin bool) gin.HandlerFunc {
 		if info, err := a.RedisPool.GetUserInfo(user); err == nil && password == info.Password {
 			if a.RedisPool.CheckTokenExpire(info) {
 				info.Token = common.EncodeUserToken(user, password, "")
-				a.RedisPool.RefreshToken(info, a.DefaultTokenExpire)
+				_ = a.RedisPool.RefreshToken(info, 0)
 			}
 
 			c.Set(gin.AuthUserKey, user)
@@ -108,7 +108,7 @@ func (a *DefaultRouter) Run(addr string) {
 	api.GET("/configmap", func(c *gin.Context) {
 		fs := common.LocalFileSystem{}
 
-		if err := fs.Open(common.GetCfgFilePath()); err != nil {
+		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
@@ -117,7 +117,7 @@ func (a *DefaultRouter) Run(addr string) {
 
 		c.Writer.Header().Set("Content-Type", "application/octet-stream")
 		c.Writer.WriteHeader(http.StatusOK)
-		fs.WriteTo(c.Writer)
+		_, _ = fs.WriteTo(c.Writer)
 	})
 
 	api.POST("/users", func(c *gin.Context) {
@@ -125,14 +125,16 @@ func (a *DefaultRouter) Run(addr string) {
 			Users []string `json:"filter"`
 		}
 
-		var err error
-
+		var (
+			err    error
+			result []common.UserInfo
+		)
 		if err = c.BindJSON(&postData); err != nil {
 			goto ServerError
 		}
 
-		if users, err := a.RedisPool.GetUsers(postData.Users); err == nil {
-			c.AbortWithStatusJSON(http.StatusOK, users)
+		if result, err = a.RedisPool.GetUsers(postData.Users); err == nil {
+			c.AbortWithStatusJSON(http.StatusOK, result)
 			return
 		}
 
@@ -161,6 +163,7 @@ func (a *DefaultRouter) Run(addr string) {
 				Account:  c.Param("account"),
 				Password: postData.Password,
 			}
+
 			if err = a.RedisPool.AddUser(info); err != nil {
 				goto ServerError
 			}
@@ -177,7 +180,7 @@ func (a *DefaultRouter) Run(addr string) {
 			return
 
 		case "change_pwd":
-			//
+			return
 		default:
 			err = errors.New("CMD only support new/change_pwd")
 		}
@@ -199,7 +202,10 @@ func (a *DefaultRouter) Run(addr string) {
 			Streams []string `json:"filter"`
 		}
 
-		var err error
+		var (
+			err    error
+			result []common.StreamInfo
+		)
 
 		if err = c.BindJSON(&postData); err != nil {
 			goto ServerError
@@ -211,7 +217,7 @@ func (a *DefaultRouter) Run(addr string) {
 			}
 		}
 
-		if result, err := a.RedisPool.GetStreams(postData.Streams); err == nil {
+		if result, err = a.RedisPool.GetStreams(postData.Streams); err == nil {
 			c.AbortWithStatusJSON(http.StatusOK, result)
 			return
 		}
@@ -297,7 +303,7 @@ func (a *DefaultRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
 	})
 
-	engine.Run(addr)
+	_ = engine.Run(addr)
 }
 
 func (a *DefaultRouter) Destory() {

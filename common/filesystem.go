@@ -2,7 +2,6 @@ package common
 
 import (
 	"bufio"
-	"github.com/caarlos0/env/v6"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -19,29 +18,21 @@ type FileSystem interface {
 }
 
 type LocalFileSystem struct {
+	handler *os.File
+	*bufio.Reader
+
 	CustomConfig
+}
+
+type HttpFileSystem struct {
+	Req  *http.Request
+	Resp *http.Response
 
 	handler *os.File
 	*bufio.Reader
-}
+	*bufio.Writer
 
-func GetHlsFilePath(path string) (string, error) {
-	conf := CustomConfig{}
-	if err := env.Parse(&conf); err != nil {
-		return "", err
-	}
-	path = conf.SrsHlsPath + path
-	_, err := os.Stat(path)
-
-	return path, err
-}
-
-func GetCfgFilePath() string {
-	conf := CustomConfig{}
-	if err := env.Parse(&conf); err != nil {
-		return ""
-	}
-	return conf.SrsCfgFile
+	CustomConfig
 }
 
 func (fs *LocalFileSystem) Open(path string) (err error) {
@@ -68,19 +59,9 @@ func (fs *LocalFileSystem) Close() error {
 	return ioutil.NopCloser(fs.handler).Close()
 }
 
-type HttpFileSystem struct {
-	Req *http.Request
-
-	resp    *http.Response
-	handler *os.File
-
-	*bufio.Reader
-	*bufio.Writer
-}
-
 func (fs *HttpFileSystem) Open(path string) (err error) {
 	if strings.HasSuffix(path, ".ts") {
-		os.MkdirAll(filepath.Dir(path), 0755)
+		_ = os.MkdirAll(filepath.Dir(path), 0755)
 
 		if fs.handler, err = os.Create(path); err == nil {
 			fs.Writer = bufio.NewWriter(fs.handler)
@@ -88,8 +69,8 @@ func (fs *HttpFileSystem) Open(path string) (err error) {
 	}
 
 	transport := http.Transport{}
-	if fs.resp, err = transport.RoundTrip(fs.Req); err == nil {
-		fs.Reader = bufio.NewReader(fs.resp.Body)
+	if fs.Resp, err = transport.RoundTrip(fs.Req); err == nil {
+		fs.Reader = bufio.NewReader(fs.Resp.Body)
 	}
 
 	return
@@ -108,11 +89,11 @@ func (fs *HttpFileSystem) Write(p []byte) (nn int, err error) {
 
 func (fs *HttpFileSystem) Close() error {
 	if fs.Writer != nil && fs.handler != nil {
-		fs.Writer.Flush()
-		fs.handler.Close()
+		_ = fs.Writer.Flush()
+		_ = fs.handler.Close()
 	}
 
-	return fs.resp.Body.Close()
+	return fs.Resp.Body.Close()
 }
 
 //type S3FileSystem struct {
