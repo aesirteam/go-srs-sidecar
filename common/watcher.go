@@ -83,12 +83,9 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 			Header: http.Header{
 				"Authorization": {"Basic " + authEnc},
 			},
-		}); err != nil {
-			return err
-		} else {
-			resp.Body.Close()
-			return nil
-		}
+		}); err != nil { return err }
+		resp.Body.Close()
+		return nil
 	}
 
 	//first
