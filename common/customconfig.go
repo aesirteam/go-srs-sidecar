@@ -1,9 +1,11 @@
 package common
 
 import (
+	"bytes"
 	"github.com/caarlos0/env/v6"
 	"github.com/sirupsen/logrus"
 	"os"
+	"os/exec"
 )
 
 const (
@@ -14,21 +16,44 @@ const (
 )
 
 var (
-	Logger = logrus.Logger{
-		Out:          os.Stderr,
+	HostName string
+	PodIp    string
+	Conf     = CustomConfig{}
+	Logger   = logrus.Logger{
+		Out:          os.Stdout,
 		Formatter:    &logrus.TextFormatter{FullTimestamp: true},
 		Level:        logrus.InfoLevel,
 		ExitFunc:     os.Exit,
 		ReportCaller: false,
 	}
-
-	Conf = CustomConfig{}
 )
 
 func init() {
 	if err := env.Parse(&Conf); err != nil {
 		Logger.Fatal(err)
 	}
+
+	ch := make(chan string, 1)
+	defer close(ch)
+
+	go execCommand(ch, "hostname", "-f")
+	go execCommand(ch, "hostname", "-i")
+
+	HostName = <-ch
+	PodIp = <-ch
+
+}
+
+func execCommand(ch chan string, name string, arg ...string) {
+	cmd := exec.Command(name, arg...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err == nil {
+		ch <- out.String()[:out.Len()-1]
+		return
+	}
+
+	ch <- ""
 }
 
 type CustomConfig struct {

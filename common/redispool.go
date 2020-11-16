@@ -1,7 +1,6 @@
 package common
 
 import (
-	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -11,7 +10,6 @@ import (
 	"math"
 	"math/rand"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -198,18 +196,6 @@ func (s *RedisPool) Close() {
 	}
 }
 
-func execCommand(ch chan string, name string, arg ...string) {
-	cmd := exec.Command(name, arg...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err == nil {
-		ch <- out.String()[:out.Len()-1]
-		return
-	}
-
-	ch <- ""
-}
-
 func (s *RedisPool) getAllUserName(accounts []string) (result []string, err error) {
 	pool, err := s.getPool("")
 	if err != nil {
@@ -365,12 +351,6 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 			ttl = 3600 * 24 * 365
 
 			go func() {
-				ch := make(chan string, 1)
-				defer close(ch)
-
-				//execCommand(ch, "hostname", "-f")
-				execCommand(ch, "hostname", "-i")
-
 				if streamInfo.Meta.ClusterOrigin, err = jsoniter.Marshal(map[string]map[string]interface{}{
 					"query": {
 						"ip":     e.Ip,
@@ -379,8 +359,8 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 						"stream": e.Stream,
 					},
 					"origin": {
-						//"node":  <-ch,
-						"ip":    <-ch,
+						"node":  HostName,
+						"ip":    PodIp,
 						"port":  1935,
 						"vhost": e.Vhost,
 					},

@@ -81,7 +81,8 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 				RawQuery: "rpc=reload&scope=configmap",
 			},
 			Header: http.Header{
-				"Authorization": {"Basic " + authEnc},
+				"X-Forwarded-For": {PodIp},
+				"Authorization":   {"Basic " + authEnc},
 			},
 		}); err != nil {
 			return err
@@ -112,9 +113,6 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 					if !ok {
 						return
 					}
-					//if event.Op&fsnotify.Write == fsnotify.Write {
-					//	reload()
-					//}
 					if event.Op&fsnotify.CloseWrite == fsnotify.CloseWrite {
 						_ = reload()
 					}
