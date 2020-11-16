@@ -84,12 +84,9 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 				"X-Forwarded-For": {PodIp},
 				"Authorization":   {"Basic " + authEnc},
 			},
-		}); err != nil {
-			return err
-		} else {
-			resp.Body.Close()
-			return nil
-		}
+		}); err != nil { return err }
+		resp.Body.Close()
+		return nil
 	}
 
 	//first
