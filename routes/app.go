@@ -57,10 +57,10 @@ func writeHandlerFunc(c *gin.Context) {
 				break
 			}
 
-			c.Writer.Header().Set("Content-Type", "apication/vnd.apple.mpegurl")
 			c.Writer.WriteHeader(http.StatusOK)
 
 			if strings.HasSuffix(path, ".m3u8") {
+				c.Writer.Header().Set("Content-Type", "apication/vnd.apple.mpegurl")
 				if c.Request.Header.Get("proxyMode") == "remote" {
 					_, err = c.Writer.Write(buf[:readLen])
 				} else {
@@ -68,7 +68,9 @@ func writeHandlerFunc(c *gin.Context) {
 				}
 			} else if strings.HasSuffix(path, ".ts") {
 				_, err = c.Writer.Write(buf[:readLen])
-				_, err = fs.Write(buf[:readLen])
+				if t, ok := fs.(*common.HttpFileSystem); ok {
+					_, err = t.Write(buf[:readLen])
+				}
 			}
 
 			c.Writer.(http.Flusher).Flush()
@@ -77,24 +79,35 @@ func writeHandlerFunc(c *gin.Context) {
 		return
 	}
 
+	c.Request.URL.Scheme = "http"
+	c.Request.URL.Host = func(host string) string {
+		if idx := strings.Index(host, ";"); idx == -1 {
+			c.Request.Header.Set("proxyMode", "")
+			return host
+		} else {
+			c.Request.Header.Set("proxyMode", host[idx+1:])
+			return host[:idx]
+		}
+	}(c.GetString("proxyHost"))
+
 	path := common.Conf.SrsHlsPath + c.Request.URL.Path
 
-	if _, err := os.Stat(c.Request.URL.Path); os.IsNotExist(err) {
-		transformFile(path, &common.HttpFileSystem{
-			Req: func(host string) *http.Request {
-				c.Request.URL.Scheme = "http"
-				c.Request.Header.Set("proxyMode", "")
-
-				if idx := strings.Index(host, ";"); idx == -1 {
-					c.Request.URL.Host = host
-				} else {
-					c.Request.URL.Host = host[:idx]
-					c.Request.Header.Set("proxyMode", host[idx+1:])
-				}
-				return c.Request
-			}(c.GetString("proxyHost")),
-		})
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		transformFile(path, &common.HttpFileSystem{Req: c.Request})
 	} else {
+		if c.Request.Header.Get("proxyMode") == "remote" {
+			c.Request.URL.Path = "/verify" + c.Request.URL.Path
+
+			transport := http.Transport{}
+			if resp, err := transport.RoundTrip(c.Request); err != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			} else if resp.StatusCode != http.StatusOK {
+				c.AbortWithStatus(resp.StatusCode)
+				return
+			}
+		}
+
 		transformFile(path, &common.LocalFileSystem{})
 	}
 }

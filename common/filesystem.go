@@ -88,8 +88,10 @@ func (fs *HttpFileSystem) Write(p []byte) (nn int, err error) {
 }
 
 func (fs *HttpFileSystem) Close() error {
-	if fs.Writer != nil && fs.handler != nil {
+	if fs.Writer != nil {
 		_ = fs.Writer.Flush()
+	}
+	if fs.handler != nil {
 		_ = fs.handler.Close()
 	}
 

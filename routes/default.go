@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"path/filepath"
+
+	//"path/filepath"
 	"strings"
 )
 
@@ -63,8 +65,20 @@ func (a *DefaultRouter) Run(addr string) {
 	api := engine.Group("/api/v1", a.basicAuth(true))
 	user := engine.Group("/", a.basicAuth(false))
 
+	engine.GET("/verify/:app/:stream", func(c *gin.Context) {
+		errCode, _, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
+			Action: "on_play",
+			Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
+			App:    c.Param("app"),
+			Stream: regexpFn.FindString(c.Param("stream")),
+			Param:  c.Request.URL.RawQuery,
+		})
+
+		c.AbortWithStatus(errCode)
+	})
+
 	engine.Use(func(c *gin.Context) {
-		if ext := filepath.Ext(c.Request.URL.Path); ext == ".m3u8" || ext == ".ts" {
+		if strings.HasSuffix(c.Request.URL.Path, ".m3u8") || strings.HasSuffix(c.Request.URL.Path, ".ts") {
 			app, stream := filepath.Split(c.Request.URL.Path)
 			if errCode, err, originIp := a.RedisPool.TokenAuth(&common.WebHookEvent{
 				Action: "on_play",
@@ -81,6 +95,8 @@ func (a *DefaultRouter) Run(addr string) {
 			} else {
 				c.Set("proxyHost", originIp+":8080")
 			}
+		} else {
+			c.Abort()
 		}
 	}, writeHandlerFunc)
 

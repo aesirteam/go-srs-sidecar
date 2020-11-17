@@ -9,26 +9,6 @@ import (
 	"time"
 )
 
-//func fileDiff(path, md5Old string) (b bool, md5Sum string) {
-//	md5Sum = md5Old
-//
-//	f, err := os.Open(path)
-//	if err != nil { return }
-//	defer f.Close()
-//
-//	hash := md5.New()
-//	_, err = io.Copy(hash, f)
-//	if err != nil { return }
-//	hashInBytes := hash.Sum(nil)[:16]
-//
-//	if md5New := hex.EncodeToString(hashInBytes); md5New != md5Old {
-//		md5Sum = md5New
-//		b = true
-//	}
-//
-//	return
-//}
-
 func removeExpireFile(root string, ttl int64) {
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if time.Now().Unix()-info.ModTime().Unix() >= ttl {
@@ -45,34 +25,9 @@ func NewWatcher() *LocalFileSystem {
 }
 
 func (fs *LocalFileSystem) ConfigFile(authEnc string) {
-	//var md5Sum	string
-	//
-	//reload := func() error {
-	//	var ok	bool
-	//	if ok, md5Sum = fileDiff(w.SrsCfgFile, md5Sum); ok {
-	//		transport := http.Transport{}
-	//		resp, err := transport.RoundTrip(&http.Request{
-	//			Method:		"GET",
-	//			URL:		&url.URL{
-	//				Scheme:     "http",
-	//				Host:       w.SrsApiServer,
-	//				Path:       "/api/v1/raw",
-	//				RawQuery:	"rpc=reload&scope=configmap",
-	//			},
-	//			Header:		http.Header{
-	//				"Authorization":	{"Basic " + authEnc},
-	//			},
-	//		})
-	//		if err != nil { return err }
-	//		resp.Body.Close()
-	//	}
-	//
-	//	return nil
-	//}
-
 	reload := func() error {
 		transport := http.Transport{}
-		if resp, err := transport.RoundTrip(&http.Request{
+		resp, err := transport.RoundTrip(&http.Request{
 			Method: "GET",
 			URL: &url.URL{
 				Scheme:   "http",
@@ -82,9 +37,13 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 			},
 			Header: http.Header{
 				"X-Forwarded-For": {PodIp},
-				"Authorization":   {"Basic " + authEnc},
+				"Authorization":   {authEnc},
 			},
-		}); err != nil { return err }
+		})
+		if err != nil {
+			return err
+		}
+
 		resp.Body.Close()
 		return nil
 	}

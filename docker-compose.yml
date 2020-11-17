@@ -5,7 +5,6 @@ services:
     image: hub.bigdatagz.com/ossrs/srs:v4.0
     restart: always
     volumes:
-      - ./conf/origin.conf:/usr/local/srs/conf/srs.conf
       - hls-data:/usr/local/srs/objs/nginx/html
     networks:
       - overlay
@@ -16,11 +15,11 @@ services:
     image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
     restart: always
     environment:
-      - redis_sentinel_host=
+      - redis_sentinel_host=127.0.0.1
       - redis_pass=
-      - redis_database=
-      - redis_pool_min=
-      - redis_pool_max=
+      - redis_database=0
+      - redis_pool_min=3
+      - redis_pool_max=10
       - DEFAULT_ADMIN_PASSWORD=
 
       - SRS_API_SERVER=origin:1985
@@ -37,8 +36,6 @@ services:
   edge:
     image: hub.bigdatagz.com/ossrs/srs:v4.0
     restart: always
-    volumes:
-      - ./conf/edge.conf:/usr/local/srs/conf/srs.conf
     networks:
       - overlay
     ports:
@@ -48,11 +45,11 @@ services:
     image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
     restart: always
     environment:
-      - redis_sentinel_host=
+      - redis_sentinel_host=127.0.0.1
       - redis_pass=
-      - redis_database=
-      - redis_pool_min=
-      - redis_pool_max=
+      - redis_database=0
+      - redis_pool_min=3
+      - redis_pool_max=10
       - DEFAULT_ADMIN_PASSWORD=
 
       - SRS_API_SERVER=edge:1985
@@ -68,8 +65,6 @@ services:
   proxy:
     image: hub.bigdatagz.com/ossrs/srs:v4.0
     restart: always
-    volumes:
-      - ./conf/proxy.conf:/usr/local/srs/conf/srs.conf
     networks:
       - overlay
     ports:
@@ -79,7 +74,10 @@ services:
     image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
     restart: always
     environment:
+      - SRS_API_SERVER=proxy:1985
       - SRS_PROXY_HOST=192.168.1.150:8080
+    volumes:
+      - ./conf/proxy.conf:/app/conf/srs.conf
     networks:
       - overlay
     ports:
