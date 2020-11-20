@@ -12,8 +12,7 @@ type ProxyRouter struct{}
 func (a *ProxyRouter) Run(addr string) {
 	//Start file watch
 	watcher := common.NewWatcher()
-	go watcher.ConfigFile("Basic YW5vbnltb3VzOg==") //anonymous
-
+	go watcher.ConfigFile("anonymous", "")
 	go watcher.MediaFile("")
 
 	engine.Use(func(c *gin.Context) {
@@ -39,8 +38,4 @@ func (a *ProxyRouter) Run(addr string) {
 	})
 
 	_ = engine.Run(addr)
-}
-
-func (a *ProxyRouter) Destory() {
-
 }

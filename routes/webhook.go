@@ -10,6 +10,7 @@ import (
 
 type WebHookRouter struct {
 	common.RedisPool
+	common.S3Client
 }
 
 func (a *WebHookRouter) Run(addr string) {
@@ -18,9 +19,13 @@ func (a *WebHookRouter) Run(addr string) {
 
 	//Start file watch
 	watcher := common.NewWatcher()
-	go watcher.ConfigFile(
-		genHeaderAuthorization("admin", password),
-	)
+	go watcher.ConfigFile("admin", password)
+
+	//start oss backup
+	if watcher.OssBackupEnabled {
+		leaseName := regexpFn.FindString(common.Hostname) + "-lease"
+		go common.LeaderElectionRunOrDie(leaseName)
+	}
 
 	api := engine.Group("/api/v1")
 
@@ -50,7 +55,7 @@ func (a *WebHookRouter) Run(addr string) {
 			return
 		}
 
-		if errCode, err, _ := a.RedisPool.TokenAuth(&hook); err != nil {
+		if errCode, err := a.RedisPool.TokenAuth(&hook); err != nil {
 			c.AbortWithStatusJSON(errCode, gin.H{"err": err.Error()})
 			return
 		}
@@ -58,27 +63,37 @@ func (a *WebHookRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
 	})
 
-	//engine.POST("/storage", func (c *gin.Context) {
-	//	var data struct {
-	//		Url			string	`json:"url" binding:"required"`
-	//		M3u8Url		string	`json:"m3u8_url" binding:"required"`
-	//	}
-	//
-	//	ch := make(chan int)
-	//	//defer close(ch)
-	//
-	//	if c.BindJSON(&data) == nil {
-	//		go a.S3Client.FPutObject(ch, data.Url, DEFAULT_STATIC + "/" + data.Url)
-	//		go a.S3Client.FPutObject(ch, data.M3u8Url, DEFAULT_STATIC + "/" + data.M3u8Url)
-	//
-	//		if (<-ch + <-ch) == 0 {
-	//			c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
-	//			return
-	//		}
-	//	}
-	//
-	//	c.AbortWithStatus(http.StatusInternalServerError)
-	//})
+	engine.POST("/storage", func(c *gin.Context) {
+		var data struct {
+			Url string `json:"url" binding:"required"`
+			//M3u8Url		string	`json:"m3u8_url" binding:"required"`
+		}
+
+		if c.BindJSON(&data) == nil {
+			if common.IsLeader {
+				ch := make(chan error)
+
+				go func() {
+					ch <- a.S3Client.FPutObject(data.Url, common.Conf.SrsHlsPath+"/"+data.Url)
+					//ch <- a.S3Client.FPutObject(data.M3u8Url, common.Conf.SrsHlsPath + "/" + data.M3u8Url)
+				}()
+
+				select {
+				case err := <-ch:
+					close(ch)
+					if err != nil {
+						goto ServerError
+					}
+				}
+			}
+
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
+			return
+		}
+
+	ServerError:
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
 
 	api.POST("/clusters", func(c *gin.Context) {
 		key := common.STREAM_PREFIX + c.DefaultQuery("vhost", common.DEFAULT_VHOST) + "/" + c.Query("app") + "/" + c.Query("stream")
@@ -107,9 +122,7 @@ func (a *WebHookRouter) Run(addr string) {
 		_, _ = fs.WriteTo(c.Writer)
 	})
 
-	_ = engine.Run(addr)
-}
+	defer a.RedisPool.Close()
 
-func (a *WebHookRouter) Destory() {
-	a.RedisPool.Close()
+	_ = engine.Run(addr)
 }

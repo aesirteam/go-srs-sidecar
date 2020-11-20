@@ -1,7 +1,6 @@
 package routes
 
 import (
-	"encoding/base64"
 	"github.com/aesirteam/go-srs-sidecar/common"
 	"github.com/gin-gonic/gin"
 	"io"
@@ -19,20 +18,6 @@ var (
 
 type App interface {
 	Run(addr string)
-	Destory()
-}
-
-func genHeaderAuthorization(user, password string) string {
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
-}
-
-func parseHeaderAuthorization(authEnc string) (string, string) {
-	if len(authEnc) == 0 {
-		return "", ""
-	}
-	_bytes, _ := base64.StdEncoding.DecodeString(authEnc)
-	val := strings.Split(string(_bytes), ":")
-	return val[0], val[1]
 }
 
 func writeHandlerFunc(c *gin.Context) {

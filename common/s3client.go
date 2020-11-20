@@ -19,33 +19,30 @@ func (c *S3Client) getClient() (*minio.Client, error) {
 	)
 }
 
-func (c *S3Client) FPutObject(ch chan int, objectName, filePath string) {
+func (c *S3Client) FPutObject(objectName, filePath string) (err error) {
 	if client, err := c.getClient(); err == nil {
-		if _, err := client.FPutObject(
+		_, err = client.FPutObject(
 			context.Background(),
 			Conf.BucketName,
 			Conf.BucketPrefix+objectName,
 			filePath,
 			minio.PutObjectOptions{},
-		); err == nil {
-			ch <- 0
-			return
-		}
+		)
 	}
 
-	ch <- 1
+	return
 }
 
 func (c *S3Client) GetObject(objectName string) (*minio.Object, error) {
-	client, err := c.getClient()
-	if err != nil {
+	if client, err := c.getClient(); err == nil {
+		return client.GetObject(
+			context.Background(),
+			Conf.BucketName,
+			Conf.BucketPrefix+objectName,
+			minio.GetObjectOptions{},
+		)
+	} else {
+
 		return nil, err
 	}
-
-	return client.GetObject(
-		context.Background(),
-		Conf.BucketName,
-		Conf.BucketPrefix+objectName,
-		minio.GetObjectOptions{},
-	)
 }

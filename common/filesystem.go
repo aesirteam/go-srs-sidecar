@@ -97,30 +97,3 @@ func (fs *HttpFileSystem) Close() error {
 
 	return fs.Resp.Body.Close()
 }
-
-//type S3FileSystem struct {
-//	s3					*S3Client
-//
-//	handler				*minio.Object
-//
-//	*bufio.Reader
-//}
-
-//func (fs *S3FileSystem) Open(path string) (err error) {
-//	if fs.handler, err = fs.s3.GetObject(path); err == nil {
-//		fs.Reader = bufio.NewReader(fs.handler)
-//	}
-//	return
-//}
-//
-//func (fs *S3FileSystem) Read(p []byte) (int, error) {
-//	return fs.Reader.Read(p)
-//}
-//
-//func (fs *S3FileSystem) Write(p []byte) (int, error) {
-//	return 0, nil
-//}
-//
-//func (fs *S3FileSystem) Close()	error {
-//	return fs.handler.Close()
-//}

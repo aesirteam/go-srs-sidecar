@@ -2,6 +2,7 @@ package common
 
 import (
 	"github.com/fsnotify/fsnotify"
+	"k8s.io/klog"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,7 +25,7 @@ func NewWatcher() *LocalFileSystem {
 	}
 }
 
-func (fs *LocalFileSystem) ConfigFile(authEnc string) {
+func (fs *LocalFileSystem) ConfigFile(user, password string) {
 	reload := func() error {
 		transport := http.Transport{}
 		resp, err := transport.RoundTrip(&http.Request{
@@ -37,7 +38,7 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 			},
 			Header: http.Header{
 				"X-Forwarded-For": {PodIp},
-				"Authorization":   {authEnc},
+				"Authorization":   {genHeaderAuthorization(user, password)},
 			},
 		})
 		if err != nil {
@@ -57,7 +58,7 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 		path := fs.SrsCfgFile
 
 		if path, err = filepath.Abs(path); err != nil {
-			Logger.Warn("Watcher[ConfigFile]: ", err.Error())
+			klog.Warning("ConfigFileWatcher: ", err.Error())
 			return
 		}
 
@@ -74,7 +75,7 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 					}
 				case err, ok := <-watcher.Errors:
 					if !ok {
-						Logger.Warn("Watcher[ConfigFile]: ", err.Error())
+						klog.Warning("ConfigFileWatcher: ", err.Error())
 						return
 					}
 				}
@@ -82,11 +83,11 @@ func (fs *LocalFileSystem) ConfigFile(authEnc string) {
 		}()
 
 		if err = watcher.Add(path); err != nil {
-			Logger.Warn("Watcher[ConfigFile]: ", err.Error())
+			klog.Warning("ConfigFileWatcher: ", err.Error())
 			return
 		}
 
-		Logger.Info("Watcher[ConfigFile]: ", "started")
+		klog.Info("ConfigFileWatcher: ", "started")
 		<-done
 	}
 }
@@ -131,14 +132,13 @@ func (fs *LocalFileSystem) MediaFile(root string) {
 					}
 				case err, ok := <-watcher.Errors:
 					if !ok {
-						Logger.Warn("Watcher[MediaFile]: ", err.Error())
+						klog.Warning("MediaFileWatcher: ", err.Error())
 						return
 					}
 				}
 			}
 		}()
-
-		Logger.Info("Watcher[MediaFile]: ", "started")
+		klog.Info("MediaFileWatcher: ", "started")
 		<-done
 	}
 }

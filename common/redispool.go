@@ -1,14 +1,11 @@
 package common
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"github.com/FZambia/sentinel"
 	"github.com/gomodule/redigo/redis"
 	"github.com/json-iterator/go"
-	"math"
-	"math/rand"
+	"k8s.io/klog"
 	"net/url"
 	"strconv"
 	"sync"
@@ -21,13 +18,13 @@ type RedisPool struct {
 }
 
 type WebHookEvent struct {
-	Action   string `json:"action" binding:"required"`
-	ClientId string `json:"client_id"`
-	Ip       string `json:"ip"`
-	Vhost    string `json:"vhost" binding:"required"`
-	App      string `json:"app" binding:"required"`
-	Stream   string `json:"stream" binding:"required"`
-	Param    string `json:"param"`
+	Action string `json:"action" binding:"required"`
+	//ClientId string `json:"client_id"`
+	Ip     string `json:"ip"`
+	Vhost  string `json:"vhost" binding:"required"`
+	App    string `json:"app" binding:"required"`
+	Stream string `json:"stream" binding:"required"`
+	Param  string `json:"param"`
 }
 
 type UserInfo struct {
@@ -60,20 +57,6 @@ var (
 	pool []*redis.Pool
 )
 
-func EncodeUserToken(user, password, nonce string) string {
-	if len(nonce) == 0 {
-		b := make([]byte, 8)
-		for i := range b {
-			b[i] = LETTER_BYTES[rand.Intn(len(LETTER_BYTES))]
-		}
-		nonce = string(b)
-	}
-
-	h := md5.New()
-	h.Write([]byte(user + ":" + password + "@" + nonce))
-	return hex.EncodeToString(h.Sum(nil)) + nonce
-}
-
 func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 	s.once.Do(func() {
 		sntnl := &sentinel.Sentinel{
@@ -82,7 +65,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 			Dial: func(addr string) (redis.Conn, error) {
 				c, err := redis.Dial("tcp", addr)
 				if err != nil {
-					Logger.Fatal(err)
+					klog.Fatal(err)
 					return nil, err
 				}
 				return c, nil
@@ -93,7 +76,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 		//init master pool
 		masterAddr, err := sntnl.MasterAddr()
 		if err != nil {
-			Logger.Fatal(err)
+			klog.Fatal(err)
 			return
 		}
 
@@ -105,7 +88,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 			Dial: func() (redis.Conn, error) {
 				c, err := redis.Dial("tcp", masterAddr, dialDatabase, dialPassword)
 				if err != nil {
-					Logger.Fatal(err)
+					klog.Fatal(err)
 					return nil, err
 				}
 				return c, nil
@@ -115,7 +98,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 					return
 				}
 				if _, err := c.Do("PING"); err != nil {
-					Logger.Fatal(err)
+					klog.Fatal(err)
 				}
 				return err
 			},
@@ -124,7 +107,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 		//init slaves pool
 		slaveAddrs, err := sntnl.SlaveAddrs()
 		if err != nil {
-			Logger.Fatal(err)
+			klog.Fatal(err)
 			return
 		}
 
@@ -137,7 +120,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 				Dial: func() (redis.Conn, error) {
 					c, err := redis.Dial("tcp", addr, dialDatabase, dialPassword)
 					if err != nil {
-						Logger.Fatal(err)
+						klog.Fatal(err)
 						return nil, err
 					}
 					return c, nil
@@ -147,7 +130,7 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 						return
 					}
 					if _, err := c.Do("PING"); err != nil {
-						Logger.Fatal(err)
+						klog.Fatal(err)
 					}
 					return err
 				},
@@ -240,7 +223,7 @@ func (s *RedisPool) getAllStreamName() (streams []string, err error) {
 	client := pool.Get()
 	defer release(client)
 
-	if reply, err := redis.Values(client.Do("SCAN", 0, "MATCH", STREAM_PREFIX+"*", "COUNT", math.MaxUint32)); err == nil {
+	if reply, err := redis.Values(client.Do("SCAN", 0, "MATCH", STREAM_PREFIX+"*", "COUNT", 1<<32-1 /*math.MaxUint32*/)); err == nil {
 		arr := reply[1].([]interface{})
 		streams = make([]string, len(arr))
 
@@ -266,6 +249,7 @@ func (s *RedisPool) RefreshToken(info *UserInfo, ttl int64) (err error) {
 	defer release(client)
 
 	if ttl == 0 {
+		info.Token = encodeUserToken(info.Account, info.Password)
 		ttl = Conf.DefaultTokenExpire
 	}
 
@@ -285,7 +269,7 @@ func (s *RedisPool) InitAdminUser() string {
 		Account:  "admin",
 		Password: Conf.DefaultAdminPasswd,
 	}); err != nil {
-		Logger.Warn(err.Error())
+		klog.Warning(err)
 	}
 
 	if info, err := s.GetUserInfo("admin"); err == nil {
@@ -295,7 +279,7 @@ func (s *RedisPool) InitAdminUser() string {
 	return ""
 }
 
-func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp string) {
+func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error) {
 	var (
 		key        = STREAM_PREFIX + e.Vhost + "/" + e.App + "/" + e.Stream
 		user       string
@@ -341,14 +325,13 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 		if userInfo, err = s.GetUserInfo(user); err != nil {
 			goto Error500
 		}
+
 		if s.CheckTokenExpire(userInfo) || userInfo.Token != token {
 			goto Error401
 		}
 
-		ttl := int64(0)
-
 		if e.Action == "on_publish" {
-			ttl = 3600 * 24 * 365
+			s.RefreshToken(userInfo, 3600*24*365)
 
 			go func() {
 				if streamInfo.Meta.ClusterOrigin, err = jsoniter.Marshal(map[string]map[string]interface{}{
@@ -359,7 +342,6 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 						"stream": e.Stream,
 					},
 					"origin": {
-						"node":  HostName,
 						"ip":    PodIp,
 						"port":  1935,
 						"vhost": e.Vhost,
@@ -368,9 +350,9 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 					s.UpdateStreamMetadata(key, streamInfo.Meta)
 				}
 			}()
+		} else {
+			s.RefreshToken(userInfo, Conf.DefaultTokenExpire)
 		}
-
-		s.RefreshToken(userInfo, ttl)
 
 	case "on_play":
 		if streamInfo.Meta.PlaySubscribe {
@@ -407,23 +389,23 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error, originIp
 			}
 
 			if !isOwner {
-				s.RefreshToken(userInfo, 0)
+				s.RefreshToken(userInfo, Conf.DefaultTokenExpire)
 			}
 		}
 
-		originIp = jsoniter.Get(streamInfo.Meta.ClusterOrigin, "origin", "ip").ToString()
+		//originIp = jsoniter.Get(streamInfo.Meta.ClusterOrigin, "origin", "ip").ToString()
 	default:
 		err = errors.New(`Action '` + e.Action + `' fail`)
 		goto Error500
 	}
 
-	return 200, nil, originIp
+	return 200, nil
 
 Error401:
-	return 401, errors.New("Unauthorized"), ""
+	return 401, errors.New("Unauthorized")
 
 Error500:
-	return 500, err, ""
+	return 500, err
 }
 
 func (s *RedisPool) GetUserInfo(account string) (result *UserInfo, err error) {
@@ -487,18 +469,7 @@ func (s *RedisPool) AddUser(info *UserInfo) (err error) {
 		return
 	}
 
-	info.Password = func() string {
-		if len(info.Password) == 0 {
-			b := make([]byte, 16)
-			for i := range b {
-				b[i] = PASSWD_BYTES[rand.Intn(len(PASSWD_BYTES))]
-			}
-			return string(b)
-		}
-		return info.Password
-	}()
-
-	info.Token = EncodeUserToken(info.Account, info.Password, "")
+	info.Password = genUserPassword(info.Password)
 
 	return s.RefreshToken(info, 0)
 }

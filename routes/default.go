@@ -6,8 +6,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"path/filepath"
-
-	//"path/filepath"
 	"strings"
 )
 
@@ -24,7 +22,7 @@ func (a *DefaultRouter) basicAuth(isAdmin bool) gin.HandlerFunc {
 			goto Unauthorized
 		}
 
-		user, password = parseHeaderAuthorization(authorization[1])
+		user, password = common.ParseHeaderAuthorization(authorization[1])
 		if len(password) == 0 {
 			goto Unauthorized
 		}
@@ -35,7 +33,6 @@ func (a *DefaultRouter) basicAuth(isAdmin bool) gin.HandlerFunc {
 		}
 		if info, err := a.RedisPool.GetUserInfo(user); err == nil && password == info.Password {
 			if a.RedisPool.CheckTokenExpire(info) {
-				info.Token = common.EncodeUserToken(user, password, "")
 				_ = a.RedisPool.RefreshToken(info, 0)
 			}
 
@@ -56,17 +53,14 @@ func (a *DefaultRouter) Run(addr string) {
 
 	//Start file watch
 	watcher := common.NewWatcher()
-	go watcher.ConfigFile(
-		genHeaderAuthorization("admin", password),
-	)
-
+	go watcher.ConfigFile("admin", password)
 	go watcher.MediaFile("")
 
 	api := engine.Group("/api/v1", a.basicAuth(true))
 	user := engine.Group("/", a.basicAuth(false))
 
 	engine.GET("/verify/:app/:stream", func(c *gin.Context) {
-		errCode, _, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
+		errCode, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
 			Action: "on_play",
 			Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 			App:    c.Param("app"),
@@ -80,7 +74,7 @@ func (a *DefaultRouter) Run(addr string) {
 	engine.Use(func(c *gin.Context) {
 		if strings.HasSuffix(c.Request.URL.Path, ".m3u8") || strings.HasSuffix(c.Request.URL.Path, ".ts") {
 			app, stream := filepath.Split(c.Request.URL.Path)
-			if errCode, err, originIp := a.RedisPool.TokenAuth(&common.WebHookEvent{
+			if errCode, err := a.RedisPool.TokenAuth(&common.WebHookEvent{
 				Action: "on_play",
 				Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 				App:    filepath.Base(app),
@@ -92,9 +86,10 @@ func (a *DefaultRouter) Run(addr string) {
 				}
 				c.String(errCode, "%s\n", err.Error())
 				c.Abort()
-			} else {
-				c.Set("proxyHost", originIp+":8080")
+				return
 			}
+
+			c.Set("proxyHost", common.Conf.SrsProxyHost)
 		} else {
 			c.Abort()
 		}
@@ -319,9 +314,7 @@ func (a *DefaultRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
 	})
 
-	_ = engine.Run(addr)
-}
+	defer a.RedisPool.Close()
 
-func (a *DefaultRouter) Destory() {
-	a.RedisPool.Close()
+	_ = engine.Run(addr)
 }

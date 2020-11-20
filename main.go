@@ -33,7 +33,5 @@ func main() {
 		app = &routes.DefaultRouter{}
 	}
 
-	defer app.Destory()
-
 	app.Run(addr)
 }
