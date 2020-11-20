@@ -1,0 +1,16 @@
+namePrefix: backup-
+
+commonLabels:
+  app: backup
+
+resources:
+  - statefulset.yaml
+  - svc.yaml
+
+configMapGenerator:
+  - name: conf
+    files:
+      - srs.conf
+
+generatorOptions:
+  disableNameSuffixHash: true

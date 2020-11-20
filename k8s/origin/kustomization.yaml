@@ -1,0 +1,16 @@
+namePrefix: origin-
+
+commonLabels:
+  app: origin
+
+resources:
+  - deployment.yaml
+  - svc.yaml
+
+configMapGenerator:
+  - name: conf
+    files:
+      - srs.conf
+
+generatorOptions:
+  disableNameSuffixHash: true

@@ -1,0 +1,45 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: srv
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: origin
+  template:
+    metadata:
+      labels:
+        app: orign
+    spec:
+      volumes:
+        - name: conf
+          configMap:
+            name: origin-conf
+      containers:
+        - name: srs
+          image: 'hub.bigdatagz.com/ossrs/srs:v4.0'
+          imagePullPolicy: Always
+          ports:
+            - name: rtmp
+              containerPort: 1935
+        - name: sidecar
+          image: 'hub.bigdatagz.com/ossrs/srs-sidecar:latest'
+          imagePullPolicy: Always
+          ports:
+            - name: sidecar
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: sidecar-env
+          volumeMounts:
+            - name: conf
+              mountPath: /app/conf
+          args:
+            - webhook
+      restartPolicy: Always
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1

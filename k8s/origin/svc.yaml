@@ -1,0 +1,11 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: svc
+spec:
+  ports:
+    - name: rtmp
+      port: 1935
+      targetPort: rtmp
+  selector:
+    app: origin

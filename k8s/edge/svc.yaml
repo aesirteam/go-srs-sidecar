@@ -1,0 +1,14 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: svc
+spec:
+  ports:
+    - name: rtmp
+      port: 1935
+      targetPort: rtmp
+    - name: sidecar
+      port: 8080
+      targetPort: sidecar
+  selector:
+    app: edge

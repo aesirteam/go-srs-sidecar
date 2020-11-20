@@ -1,0 +1,56 @@
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: srv
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backup
+  template:
+    metadata:
+      labels:
+        app: backup
+    spec:
+      volumes:
+        - name: conf
+          configMap:
+            name: backup-conf
+        - name: hls
+          emptyDir: {}
+      containers:
+        - name: srs
+          image: 'hub.bigdatagz.com/ossrs/srs:v4.0'
+          imagePullPolicy: Always
+          ports:
+            - name: rtmp
+              containerPort: 1935
+          volumeMounts:
+            - name: hls
+              mountPath: /usr/local/srs/objs/nginx/html
+        - name: sidecar
+          image: 'hub.bigdatagz.com/ossrs/srs-sidecar:latest'
+          imagePullPolicy: Always
+          ports:
+            - name: sidecar
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: sidecar-env
+          env:
+            - name: OSS_BACKUP_ENABLED
+              value: 'true'
+          volumeMounts:
+            - name: conf
+              mountPath: /app/conf
+            - name: hls
+              mountPath: /app/public
+          args:
+            - webhook
+      restartPolicy: Always
+      hostAliases:
+        - ip: 10.204.62.33
+          hostnames:
+            - pan.bigdatagz.com
+  serviceName: backup-svc
+  volumeClaimTemplates: []

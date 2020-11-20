@@ -1,0 +1,16 @@
+namePrefix: edge-
+
+commonLabels:
+  app: edge
+
+resources:
+  - deployment.yaml
+  - svc.yaml
+
+configMapGenerator:
+  - name: conf
+    files:
+      - srs.conf
+
+generatorOptions:
+  disableNameSuffixHash: true
