@@ -13,46 +13,6 @@ type DefaultRouter struct {
 	common.RedisPool
 }
 
-func (a *DefaultRouter) basicAuth(isAdmin bool) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, password := common.ParseHeaderAuthorization(c.GetHeader("Authorization"))
-		if len(user) == 0 || len(password) == 0 {
-			c.Header("WWW-Authenticate", "Authorization Required")
-			c.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-
-		if isAdmin && user != "admin" {
-			c.AbortWithStatus(http.StatusForbidden)
-			return
-		}
-
-		uc := make(chan func() (*common.UserInfo, error), 1)
-		defer close(uc)
-
-		go func() {
-			uc <- func() (*common.UserInfo, error) { return a.RedisPool.GetUserInfo(user) }
-		}()
-
-		if info, err := (<-uc)(); err != nil {
-			c.AbortWithStatus(http.StatusInternalServerError)
-		} else {
-			if password != info.Password {
-				c.Header("WWW-Authenticate", "Authorization Required")
-				c.AbortWithStatus(http.StatusUnauthorized)
-				return
-			}
-
-			if info, err = a.RedisPool.RefreshToken(info); err != nil {
-				c.AbortWithStatus(http.StatusInternalServerError)
-				return
-			}
-
-			c.Set(gin.AuthUserKey, info)
-		}
-	}
-}
-
 func (a *DefaultRouter) Run(addr string) {
 	//Create user admin
 	password := a.RedisPool.InitAdminUser()
@@ -62,11 +22,11 @@ func (a *DefaultRouter) Run(addr string) {
 	go watcher.ConfigFile("admin", password)
 	go watcher.MediaFile("")
 
-	apiGroup := engine.Group("/api/v1", a.basicAuth(true))
-	userGroup := engine.Group("/", a.basicAuth(false))
+	apiGroup := engine.Group("/api/v1", basicAuth(true, &a.RedisPool))
+	userGroup := engine.Group("/", basicAuth(false, &a.RedisPool))
 
 	engine.GET("/verify/:app/:stream", func(c *gin.Context) {
-		errCode, errMsg := a.RedisPool.TokenAuth(&common.WebHookEvent{
+		errCode, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
 			Action: "on_play",
 			Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 			App:    c.Param("app"),
@@ -74,8 +34,7 @@ func (a *DefaultRouter) Run(addr string) {
 			Param:  c.Request.URL.RawQuery,
 		})
 
-		//c.AbortWithStatus(errCode)
-		c.String(errCode, "%s\n", errMsg)
+		c.AbortWithStatus(errCode)
 	})
 
 	engine.Use(func(c *gin.Context) {
@@ -102,30 +61,9 @@ func (a *DefaultRouter) Run(addr string) {
 		}
 	}, writeHandlerFunc)
 
-	userGroup.GET("/user/token", func(c *gin.Context) {
-		info := c.MustGet(gin.AuthUserKey).(*common.UserInfo)
+	userGroup.GET("/user/token", echoUserTokenFunc)
 
-		c.String(http.StatusOK, "?u=%s&t=%s", info.Account, info.Token)
-	})
-
-	//userGroup.POST("/user/change_pwd", func(c *gin.Context) {
-	//
-	//})
-
-	apiGroup.GET("/configmap", func(c *gin.Context) {
-		fs := common.LocalFileSystem{}
-
-		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
-			c.AbortWithStatus(http.StatusInternalServerError)
-			return
-		}
-
-		defer fs.Close()
-
-		c.Writer.Header().Set("Content-Type", "application/octet-stream")
-		c.Writer.WriteHeader(http.StatusOK)
-		_, _ = fs.WriteTo(c.Writer)
-	})
+	apiGroup.GET("/configmap", writeConfigMapFunc)
 
 	apiGroup.POST("/users", func(c *gin.Context) {
 		var (

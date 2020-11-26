@@ -20,6 +20,46 @@ type App interface {
 	Run(addr string)
 }
 
+func basicAuth(isAdmin bool, redisPool *common.RedisPool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, password := common.ParseHeaderAuthorization(c.GetHeader("Authorization"))
+		if len(user) == 0 || len(password) == 0 {
+			c.Header("WWW-Authenticate", "Authorization Required")
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
+		if isAdmin && user != "admin" {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+
+		uc := make(chan func() (*common.UserInfo, error), 1)
+		defer close(uc)
+
+		go func() {
+			uc <- func() (*common.UserInfo, error) { return redisPool.GetUserInfo(user) }
+		}()
+
+		if info, err := (<-uc)(); err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+		} else {
+			if password != info.Password {
+				c.Header("WWW-Authenticate", "Authorization Required")
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
+			}
+
+			if info, err = redisPool.RefreshToken(info); err != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+
+			c.Set(gin.AuthUserKey, info)
+		}
+	}
+}
+
 func writeHandlerFunc(c *gin.Context) {
 	transformFile := func(path string, fs common.FileSystem) {
 		if err := fs.Open(path); err != nil {
@@ -81,18 +121,52 @@ func writeHandlerFunc(c *gin.Context) {
 		transformFile(path, &common.HttpFileSystem{Req: c.Request})
 	} else {
 		if c.Request.Header.Get("proxyMode") == "remote" {
-			c.Request.URL.Path = "/verify" + c.Request.URL.Path
 
-			transport := http.Transport{}
-			if resp, err := transport.RoundTrip(c.Request); err != nil {
+			ch := make(chan func() (int, error), 1)
+			defer close(ch)
+
+			go func() {
+				ch <- func() (int, error) {
+					c.Request.URL.Path = "/verify" + c.Request.URL.Path
+
+					transport := http.Transport{}
+
+					resp, err := transport.RoundTrip(c.Request)
+					defer resp.Body.Close()
+
+					return resp.StatusCode, err
+				}
+			}()
+
+			if statusCode, err := (<-ch)(); err != nil {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
-			} else if resp.StatusCode != http.StatusOK {
-				c.AbortWithStatus(resp.StatusCode)
+			} else if statusCode != http.StatusOK {
+				c.AbortWithStatus(statusCode)
 				return
 			}
 		}
 
 		transformFile(path, &common.LocalFileSystem{})
 	}
+}
+
+func writeConfigMapFunc(c *gin.Context) {
+	fs := common.LocalFileSystem{}
+
+	if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	defer fs.Close()
+
+	c.Writer.Header().Set("Content-Type", "application/octet-stream")
+	c.Writer.WriteHeader(http.StatusOK)
+	_, _ = fs.WriteTo(c.Writer)
+}
+
+func echoUserTokenFunc(c *gin.Context) {
+	info := c.MustGet(gin.AuthUserKey).(*common.UserInfo)
+	c.String(http.StatusOK, "?u=%s&t=%s", info.Account, info.Token)
 }

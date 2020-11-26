@@ -27,6 +27,7 @@ func (a *WebHookRouter) Run(addr string) {
 	go common.LeaderElectionRunOrDie(leaseName)
 
 	apiGroup := engine.Group("/api/v1")
+	userGroup := engine.Group("/", basicAuth(false, &a.RedisPool))
 
 	engine.Use(func(c *gin.Context) {
 		if ext := filepath.Ext(c.Request.URL.Path); ext == ".m3u8" || ext == ".ts" {
@@ -96,6 +97,10 @@ func (a *WebHookRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
 	})
 
+	userGroup.GET("/user/token", echoUserTokenFunc)
+
+	apiGroup.GET("/configmap", writeConfigMapFunc)
+
 	apiGroup.POST("/clusters", func(c *gin.Context) {
 		key := common.STREAM_PREFIX + c.DefaultQuery("vhost", common.DEFAULT_VHOST) + "/" + c.Query("app") + "/" + c.Query("stream")
 
@@ -107,20 +112,6 @@ func (a *WebHookRouter) Run(addr string) {
 		}
 
 		c.AbortWithStatus(http.StatusInternalServerError)
-	})
-
-	apiGroup.GET("/configmap", func(c *gin.Context) {
-		fs := common.LocalFileSystem{}
-
-		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
-			c.AbortWithStatus(http.StatusInternalServerError)
-			return
-		}
-		defer fs.Close()
-
-		c.Writer.Header().Set("Content-Type", "application/octet-stream")
-		c.Writer.WriteHeader(http.StatusOK)
-		_, _ = fs.WriteTo(c.Writer)
 	})
 
 	defer a.RedisPool.Close()

@@ -3,7 +3,6 @@ package routes
 import (
 	"github.com/aesirteam/go-srs-sidecar/common"
 	"github.com/gin-gonic/gin"
-	"net/http"
 	"strings"
 )
 
@@ -15,6 +14,8 @@ func (a *ProxyRouter) Run(addr string) {
 	go watcher.ConfigFile("anonymous", "")
 	go watcher.MediaFile("")
 
+	apiGroup := engine.Group("/api/v1")
+
 	engine.Use(func(c *gin.Context) {
 		if strings.HasSuffix(c.Request.URL.Path, ".m3u8") || strings.HasSuffix(c.Request.URL.Path, ".ts") {
 			c.Set("proxyHost", watcher.SrsProxyHost+";remote")
@@ -23,19 +24,7 @@ func (a *ProxyRouter) Run(addr string) {
 		}
 	}, writeHandlerFunc)
 
-	engine.GET("/api/v1/configmap", func(c *gin.Context) {
-		fs := common.LocalFileSystem{}
-
-		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
-			c.AbortWithStatus(http.StatusInternalServerError)
-			return
-		}
-		defer fs.Close()
-
-		c.Writer.Header().Set("Content-Type", "application/octet-stream")
-		c.Writer.WriteHeader(http.StatusOK)
-		_, _ = fs.WriteTo(c.Writer)
-	})
+	apiGroup.GET("/configmap", writeConfigMapFunc)
 
 	_ = engine.Run(addr)
 }

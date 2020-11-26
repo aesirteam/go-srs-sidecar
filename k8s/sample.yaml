@@ -19,19 +19,22 @@ spec:
         - name: srs
           image: 'hub.bigdatagz.com/ossrs/rtmp-push-sample:latest'
           env:
+            - name: AUTH_SERVER
+              value: edge-svc.srs-cluster.svc.prod.dict.gz.cmcc:8080
             - name: RTMP_HOST
               value: origin-svc.srs-cluster.svc.prod.dict.gz.cmcc
+            - name: RTMP_PORT
+              value: '1935'
             - name: RTMP_USER
-              value: ''
+              value: '[YOUR NAME]'
             - name: RTMP_PASSWORD
-              value: ''
+              value: '[YOUR PASSWORD]'
           readinessProbe:
             exec:
-              command: ['nc', 'origin-svc.srs-cluster.svc.prod.dict.gz.cmcc', '1935']
+              command:
+                - nc
+                - $(RTMP_HOST)
+                - $(RTMP_PORT)
             initialDelaySeconds: 5
             periodSeconds: 10
       restartPolicy: Always
-      hostAliases:
-        - ip: 10.204.62.33
-          hostnames:
-            - live.bigdatagz.com
