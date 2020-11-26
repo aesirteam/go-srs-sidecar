@@ -15,35 +15,41 @@ type DefaultRouter struct {
 
 func (a *DefaultRouter) basicAuth(isAdmin bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var user, password string
-
-		authorization := strings.Split(c.GetHeader("Authorization"), " ")
-		if len(authorization) < 2 {
-			goto Unauthorized
-		}
-
-		user, password = common.ParseHeaderAuthorization(authorization[1])
-		if len(password) == 0 {
-			goto Unauthorized
+		user, password := common.ParseHeaderAuthorization(c.GetHeader("Authorization"))
+		if len(user) == 0 || len(password) == 0 {
+			c.Header("WWW-Authenticate", "Authorization Required")
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
 		}
 
 		if isAdmin && user != "admin" {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
-		if info, err := a.RedisPool.GetUserInfo(user); err == nil && password == info.Password {
-			if a.RedisPool.CheckTokenExpire(info) {
-				_ = a.RedisPool.RefreshToken(info, 0)
+
+		uc := make(chan func() (*common.UserInfo, error), 1)
+		defer close(uc)
+
+		go func() {
+			uc <- func() (*common.UserInfo, error) { return a.RedisPool.GetUserInfo(user) }
+		}()
+
+		if info, err := (<-uc)(); err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+		} else {
+			if password != info.Password {
+				c.Header("WWW-Authenticate", "Authorization Required")
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
 			}
 
-			c.Set(gin.AuthUserKey, user)
+			if info, err = a.RedisPool.RefreshToken(info); err != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
 
-			return
+			c.Set(gin.AuthUserKey, info)
 		}
-
-	Unauthorized:
-		c.Header("WWW-Authenticate", "Authorization Required")
-		c.AbortWithStatus(http.StatusUnauthorized)
 	}
 }
 
@@ -56,11 +62,11 @@ func (a *DefaultRouter) Run(addr string) {
 	go watcher.ConfigFile("admin", password)
 	go watcher.MediaFile("")
 
-	api := engine.Group("/api/v1", a.basicAuth(true))
-	user := engine.Group("/", a.basicAuth(false))
+	apiGroup := engine.Group("/api/v1", a.basicAuth(true))
+	userGroup := engine.Group("/", a.basicAuth(false))
 
 	engine.GET("/verify/:app/:stream", func(c *gin.Context) {
-		errCode, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
+		errCode, errMsg := a.RedisPool.TokenAuth(&common.WebHookEvent{
 			Action: "on_play",
 			Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 			App:    c.Param("app"),
@@ -68,13 +74,14 @@ func (a *DefaultRouter) Run(addr string) {
 			Param:  c.Request.URL.RawQuery,
 		})
 
-		c.AbortWithStatus(errCode)
+		//c.AbortWithStatus(errCode)
+		c.String(errCode, "%s\n", errMsg)
 	})
 
 	engine.Use(func(c *gin.Context) {
 		if strings.HasSuffix(c.Request.URL.Path, ".m3u8") || strings.HasSuffix(c.Request.URL.Path, ".ts") {
 			app, stream := filepath.Split(c.Request.URL.Path)
-			if errCode, err := a.RedisPool.TokenAuth(&common.WebHookEvent{
+			if errCode, errMsg := a.RedisPool.TokenAuth(&common.WebHookEvent{
 				Action: "on_play",
 				Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 				App:    filepath.Base(app),
@@ -84,7 +91,7 @@ func (a *DefaultRouter) Run(addr string) {
 				if errCode == http.StatusUnauthorized {
 					c.Header("WWW-Authenticate", `Basic realm="Authorization Required"`)
 				}
-				c.String(errCode, "%s\n", err.Error())
+				c.String(errCode, "%s\n", errMsg)
 				c.Abort()
 				return
 			}
@@ -95,28 +102,17 @@ func (a *DefaultRouter) Run(addr string) {
 		}
 	}, writeHandlerFunc)
 
-	user.GET("/user/token", func(c *gin.Context) {
-		user := c.GetString(gin.AuthUserKey)
+	userGroup.GET("/user/token", func(c *gin.Context) {
+		info := c.MustGet(gin.AuthUserKey).(*common.UserInfo)
 
-		if info, err := a.RedisPool.GetUserInfo(user); err == nil {
-			//c.PureJSON(http.StatusOK, gin.H{
-			//	"account":	user,
-			//	"param":	"?u=" + user + "&t=" + info.Token,
-			//	"expire":	info.TokenExpire,
-			//	"token":	info.Token[:32],
-			//	"nonce":	info.Token[32:],
-			//})
-			c.String(http.StatusOK, "?u=%s&t=%s", user, info.Token)
-		} else {
-			c.String(http.StatusInternalServerError, "%s", err.Error())
-		}
+		c.String(http.StatusOK, "?u=%s&t=%s", info.Account, info.Token)
 	})
 
-	user.POST("/user/change_pwd", func(c *gin.Context) {
-		//
-	})
+	//userGroup.POST("/user/change_pwd", func(c *gin.Context) {
+	//
+	//})
 
-	api.GET("/configmap", func(c *gin.Context) {
+	apiGroup.GET("/configmap", func(c *gin.Context) {
 		fs := common.LocalFileSystem{}
 
 		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
@@ -131,12 +127,11 @@ func (a *DefaultRouter) Run(addr string) {
 		_, _ = fs.WriteTo(c.Writer)
 	})
 
-	api.POST("/users", func(c *gin.Context) {
-		var postData struct {
-			Users []string `json:"filter"`
-		}
-
+	apiGroup.POST("/users", func(c *gin.Context) {
 		var (
+			postData struct {
+				Users []string `json:"filter"`
+			}
 			err    error
 			result []common.UserInfo
 		)
@@ -153,12 +148,11 @@ func (a *DefaultRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
 	})
 
-	api.POST("/user/:account", func(c *gin.Context) {
-		var postData struct {
-			Password string `json:"password"`
-		}
-
+	apiGroup.POST("/user/:account", func(c *gin.Context) {
 		var (
+			postData struct {
+				Password string `json:"password"`
+			}
 			err  error
 			info *common.UserInfo
 			cmd  = c.DefaultQuery("cmd", "new")
@@ -175,11 +169,7 @@ func (a *DefaultRouter) Run(addr string) {
 				Password: postData.Password,
 			}
 
-			if err = a.RedisPool.AddUser(info); err != nil {
-				goto ServerError
-			}
-
-			if info, err = a.RedisPool.GetUserInfo(info.Account); err != nil {
+			if info, err = a.RedisPool.AddUser(info); err != nil {
 				goto ServerError
 			}
 
@@ -200,7 +190,7 @@ func (a *DefaultRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
 	})
 
-	api.DELETE("/user/:account", func(c *gin.Context) {
+	apiGroup.DELETE("/user/:account", func(c *gin.Context) {
 		if err := a.RedisPool.DeleteUser(c.Param("account")); err == nil {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
 		} else {
@@ -208,12 +198,11 @@ func (a *DefaultRouter) Run(addr string) {
 		}
 	})
 
-	api.POST("/streams", func(c *gin.Context) {
-		var postData struct {
-			Streams []string `json:"filter"`
-		}
-
+	apiGroup.POST("/streams", func(c *gin.Context) {
 		var (
+			postData struct {
+				Streams []string `json:"filter"`
+			}
 			err    error
 			result []common.StreamInfo
 		)
@@ -237,14 +226,13 @@ func (a *DefaultRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
 	})
 
-	api.POST("/stream/:app/:stream", func(c *gin.Context) {
-		var postData struct {
-			Owner    string            `json:"owner"`
-			Metadata common.StreamMeta `json:"metadata"`
-			Users    []string          `json:"users"`
-		}
-
+	apiGroup.POST("/stream/:app/:stream", func(c *gin.Context) {
 		var (
+			postData struct {
+				Owner    string            `json:"owner"`
+				Metadata common.StreamMeta `json:"metadata"`
+				Users    []string          `json:"users"`
+			}
 			err    error
 			stream *common.StreamInfo
 			key    = common.STREAM_PREFIX + c.DefaultQuery("vhost", common.DEFAULT_VHOST) + "/" + c.Param("app") + "/" + c.Param("stream")
@@ -279,12 +267,11 @@ func (a *DefaultRouter) Run(addr string) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
 	})
 
-	api.DELETE("/stream/:app/:stream", func(c *gin.Context) {
-		var postData struct {
-			Users []string `json:"users"`
-		}
-
+	apiGroup.DELETE("/stream/:app/:stream", func(c *gin.Context) {
 		var (
+			postData struct {
+				Users []string `json:"users"`
+			}
 			err    error
 			stream *common.StreamInfo
 			key    = common.STREAM_PREFIX + c.DefaultQuery("vhost", common.DEFAULT_VHOST) + "/" + c.Param("app") + "/" + c.Param("stream")

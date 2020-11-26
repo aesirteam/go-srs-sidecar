@@ -20,6 +20,7 @@ func main() {
 	default:
 		cmd, addr = "default", ":8080"
 	}
+
 	if len(os.Args) > 1 {
 		cmd = os.Args[1]
 	}

@@ -4,6 +4,7 @@ import (
 	"github.com/aesirteam/go-srs-sidecar/common"
 	"github.com/gin-gonic/gin"
 	"github.com/json-iterator/go"
+	"k8s.io/klog"
 	"net/http"
 	"path/filepath"
 )
@@ -22,12 +23,10 @@ func (a *WebHookRouter) Run(addr string) {
 	go watcher.ConfigFile("admin", password)
 
 	//start oss backup
-	if watcher.OssBackupEnabled {
-		leaseName := regexpFn.FindString(common.Hostname) + "-lease"
-		go common.LeaderElectionRunOrDie(leaseName)
-	}
+	leaseName := regexpFn.FindString(common.Hostname) + "-leader"
+	go common.LeaderElectionRunOrDie(leaseName)
 
-	api := engine.Group("/api/v1")
+	apiGroup := engine.Group("/api/v1")
 
 	engine.Use(func(c *gin.Context) {
 		if ext := filepath.Ext(c.Request.URL.Path); ext == ".m3u8" || ext == ".ts" {
@@ -55,8 +54,8 @@ func (a *WebHookRouter) Run(addr string) {
 			return
 		}
 
-		if errCode, err := a.RedisPool.TokenAuth(&hook); err != nil {
-			c.AbortWithStatusJSON(errCode, gin.H{"err": err.Error()})
+		if errCode, errMsg := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+			c.AbortWithStatusJSON(errCode, gin.H{"err": errMsg})
 			return
 		}
 
@@ -64,38 +63,40 @@ func (a *WebHookRouter) Run(addr string) {
 	})
 
 	engine.POST("/storage", func(c *gin.Context) {
-		var data struct {
-			Url string `json:"url" binding:"required"`
-			//M3u8Url		string	`json:"m3u8_url" binding:"required"`
+		var hook common.WebHookEvent
+
+		if err := c.BindJSON(&hook); err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": err.Error()})
+			return
 		}
 
-		if c.BindJSON(&data) == nil {
-			if common.IsLeader {
+		if common.IsLeader {
+			if errCode, errMsg := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+				klog.Error(errCode, ": ", errMsg)
+			}
+
+			if common.Conf.OssBackupEnabled {
 				ch := make(chan error)
 
 				go func() {
-					ch <- a.S3Client.FPutObject(data.Url, common.Conf.SrsHlsPath+"/"+data.Url)
-					//ch <- a.S3Client.FPutObject(data.M3u8Url, common.Conf.SrsHlsPath + "/" + data.M3u8Url)
+					ch <- a.S3Client.FPutObject(hook.Url, common.Conf.SrsHlsPath+"/"+hook.Url)
+					//ch <- a.S3Client.FPutObject(hook.M3u8Url, common.Conf.SrsHlsPath + "/" + hook.M3u8Url)
 				}()
 
 				select {
 				case err := <-ch:
 					close(ch)
 					if err != nil {
-						goto ServerError
+						klog.Error(err)
 					}
 				}
 			}
-
-			c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
-			return
 		}
 
-	ServerError:
-		c.AbortWithStatus(http.StatusInternalServerError)
+		c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
 	})
 
-	api.POST("/clusters", func(c *gin.Context) {
+	apiGroup.POST("/clusters", func(c *gin.Context) {
 		key := common.STREAM_PREFIX + c.DefaultQuery("vhost", common.DEFAULT_VHOST) + "/" + c.Query("app") + "/" + c.Query("stream")
 
 		if info, err := a.RedisPool.GetStreamInfo(key); err == nil {
@@ -108,7 +109,7 @@ func (a *WebHookRouter) Run(addr string) {
 		c.AbortWithStatus(http.StatusInternalServerError)
 	})
 
-	api.GET("/configmap", func(c *gin.Context) {
+	apiGroup.GET("/configmap", func(c *gin.Context) {
 		fs := common.LocalFileSystem{}
 
 		if err := fs.Open(common.Conf.SrsCfgFile); err != nil {

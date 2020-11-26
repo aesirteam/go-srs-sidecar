@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	LETTER_BYTES  = "abcdefghijklmnopqrstuvwxyz0123456789"
-	PASSWD_BYTES  = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNpPqQrRsStTuUvVwWxXyYzZ123456789"
+	LETTER_BYTES  = "ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghijklmnpqrstuvwxyz123456789"
 	STREAM_PREFIX = "stream:"
 	DEFAULT_VHOST = "__defaultVhost__"
 )
@@ -35,16 +34,16 @@ func init() {
 		os.Exit(0)
 	}
 
-	ch := make(chan string, 3)
+	Hostname, _ = os.Hostname()
+
+	ch := make(chan string, 2)
 	go func() {
-		ch <- execCommand("hostname")
 		ch <- execCommand("hostname", "-i")
 		ch <- execCommand("cat", "/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	}()
 
 	select {
-	case Hostname = <-ch:
-		PodIp = <-ch
+	case PodIp = <-ch:
 		Namespace = <-ch
 		close(ch)
 	}
@@ -71,7 +70,7 @@ func genUserPassword(password string) string {
 	if len(password) == 0 {
 		b := make([]byte, 16)
 		for i := range b {
-			b[i] = PASSWD_BYTES[rand.Intn(len(PASSWD_BYTES))]
+			b[i] = LETTER_BYTES[rand.Intn(len(LETTER_BYTES))]
 		}
 		return string(b)
 	}
@@ -85,7 +84,7 @@ func encodeUserToken(user, password string) string {
 		for i := range b {
 			b[i] = LETTER_BYTES[rand.Intn(len(LETTER_BYTES))]
 		}
-		return string(b)
+		return strings.ToLower(string(b))
 	}()
 
 	h := md5.New()
@@ -93,13 +92,17 @@ func encodeUserToken(user, password string) string {
 	return hex.EncodeToString(h.Sum(nil)) + nonce
 }
 
-func ParseHeaderAuthorization(authEnc string) (string, string) {
-	if len(authEnc) == 0 {
-		return "", ""
+func ParseHeaderAuthorization(val string) (user string, password string) {
+	if len(val) > 0 {
+		if authorization := strings.Split(val, " "); len(authorization) > 1 {
+			if bytes, err := base64.StdEncoding.DecodeString(authorization[1]); err == nil {
+				auth := strings.Split(string(bytes), ":")
+				user, password = auth[0], auth[1]
+			}
+		}
 	}
-	_bytes, _ := base64.StdEncoding.DecodeString(authEnc)
-	val := strings.Split(string(_bytes), ":")
-	return val[0], val[1]
+
+	return
 }
 
 type CustomConfig struct {

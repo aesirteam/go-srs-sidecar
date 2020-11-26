@@ -20,11 +20,13 @@ type RedisPool struct {
 type WebHookEvent struct {
 	Action string `json:"action" binding:"required"`
 	//ClientId string `json:"client_id"`
-	Ip     string `json:"ip"`
-	Vhost  string `json:"vhost" binding:"required"`
-	App    string `json:"app" binding:"required"`
-	Stream string `json:"stream" binding:"required"`
-	Param  string `json:"param"`
+	Ip      string `json:"ip" binding:"required"`
+	Vhost   string `json:"vhost" binding:"required"`
+	App     string `json:"app" binding:"required"`
+	Stream  string `json:"stream" binding:"required"`
+	Param   string `json:"param"`
+	Url     string `json:"url"`
+	M3u8Url string `json:"m3u8_url"`
 }
 
 type UserInfo struct {
@@ -179,14 +181,16 @@ func (s *RedisPool) Close() {
 	}
 }
 
-func (s *RedisPool) getAllUserName(accounts []string) (result []string, err error) {
+func (s *RedisPool) getAllUserName(accounts []string) ([]string, error) {
 	pool, err := s.getPool("")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
 	defer release(client)
+
+	var result []string
 
 	if len(accounts) == 0 {
 		if reply, err := client.Do("HGETALL", "users"); err == nil {
@@ -211,17 +215,19 @@ func (s *RedisPool) getAllUserName(accounts []string) (result []string, err erro
 		}
 	}
 
-	return
+	return result, nil
 }
 
-func (s *RedisPool) getAllStreamName() (streams []string, err error) {
+func (s *RedisPool) getAllStreamName() ([]string, error) {
 	pool, err := s.getPool("")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
 	defer release(client)
+
+	var streams []string
 
 	if reply, err := redis.Values(client.Do("SCAN", 0, "MATCH", STREAM_PREFIX+"*", "COUNT", 1<<32-1 /*math.MaxUint32*/)); err == nil {
 		arr := reply[1].([]interface{})
@@ -232,202 +238,180 @@ func (s *RedisPool) getAllStreamName() (streams []string, err error) {
 		}
 	}
 
-	return
+	return streams, nil
 }
 
-func (s *RedisPool) CheckTokenExpire(info *UserInfo) bool {
-	return info.TokenExpire-time.Now().Unix() <= 0
-}
-
-func (s *RedisPool) RefreshToken(info *UserInfo, ttl int64) (err error) {
+func (s *RedisPool) RefreshToken(info *UserInfo) (*UserInfo, error) {
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
 	defer release(client)
 
-	if ttl == 0 {
+	if info.TokenExpire-time.Now().Unix() <= 0 {
 		info.Token = encodeUserToken(info.Account, info.Password)
-		ttl = Conf.DefaultTokenExpire
 	}
 
 	if obj, err := jsoniter.Marshal(map[string]interface{}{
 		"password": info.Password,
 		"token":    info.Token,
-		"expire":   time.Now().Unix() + ttl,
+		"expire":   time.Now().Unix() + Conf.DefaultTokenExpire,
 	}); err == nil {
 		_, err = client.Do("HSET", "users", info.Account, obj)
 	}
 
-	return
+	return info, nil
 }
 
 func (s *RedisPool) InitAdminUser() string {
-	if err := s.AddUser(&UserInfo{
+	var (
+		info *UserInfo
+		err  error
+	)
+
+	if info, err = s.AddUser(&UserInfo{
 		Account:  "admin",
 		Password: Conf.DefaultAdminPasswd,
 	}); err != nil {
 		klog.Warning(err)
 	}
 
-	if info, err := s.GetUserInfo("admin"); err == nil {
-		return info.Password
-	}
-
-	return ""
+	return info.Password
 }
-
-func (s *RedisPool) TokenAuth(e *WebHookEvent) (errCode int, err error) {
+func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 	var (
-		key        = STREAM_PREFIX + e.Vhost + "/" + e.App + "/" + e.Stream
-		user       string
-		token      string
-		query      url.Values
-		streamInfo *StreamInfo
-		userInfo   *UserInfo
-		isOwner    bool
+		user, token string
+		key         = STREAM_PREFIX + e.Vhost + "/" + e.App + "/" + e.Stream
 	)
 
 	if len(e.Param) > 0 && e.Param[0] == 63 {
 		e.Param = e.Param[1:]
 	}
 
-	if query, err = url.ParseQuery(e.Param); err != nil {
-		goto Error500
-	}
-	user, token = query.Get("u"), query.Get("t")
-
-	if streamInfo, err = s.GetStreamInfo(key); err != nil {
-		goto Error500
-	}
-	if !streamInfo.Exists {
-		errCode = 404
-		err = errors.New(`Key '` + key + `' not exists`)
-		return
+	if query, err := url.ParseQuery(e.Param); err != nil {
+		return 500, err.Error()
+	} else {
+		user, token = query.Get("u"), query.Get("t")
 	}
 
-	isOwner = user == streamInfo.Owner
+	sc := make(chan func() (*StreamInfo, error), 1)
+	defer close(sc)
 
-	switch e.Action {
-	case "on_publish", "on_unpublish":
-		if len(user) == 0 || len(token) == 0 {
-			goto Error401
+	go func() {
+		sc <- func() (*StreamInfo, error) { return s.GetStreamInfo(key) }
+	}()
+
+	if streamInfo, err := (<-sc)(); err != nil {
+		return 500, err.Error()
+	} else {
+		if !streamInfo.Exists {
+			return 404, `Key "` + key + `" not exists`
 		}
 
-		if !isOwner {
-			errCode = 403
-			err = errors.New("The publish stream owner fail")
-			return
-		}
+		switch e.Action {
+		case "on_publish", "on_hls":
+			if len(user) == 0 || len(token) == 0 {
+				return 401, "Unauthorized"
+			}
 
-		if userInfo, err = s.GetUserInfo(user); err != nil {
-			goto Error500
-		}
+			if !(user == streamInfo.Owner) {
+				return 403, "The stream owner not match"
+			}
 
-		if s.CheckTokenExpire(userInfo) || userInfo.Token != token {
-			goto Error401
-		}
-
-		if e.Action == "on_publish" {
-			s.RefreshToken(userInfo, 3600*24*365)
+			uc := make(chan func() (*UserInfo, error), 1)
+			defer close(uc)
 
 			go func() {
-				if streamInfo.Meta.ClusterOrigin, err = jsoniter.Marshal(map[string]map[string]interface{}{
-					"query": {
-						"ip":     e.Ip,
-						"vhost":  e.Vhost,
-						"app":    e.App,
-						"stream": e.Stream,
-					},
-					"origin": {
-						"ip":    PodIp,
-						"port":  1935,
-						"vhost": e.Vhost,
-					},
-				}); err == nil {
-					s.UpdateStreamMetadata(key, streamInfo.Meta)
-				}
+				uc <- func() (*UserInfo, error) { return s.GetUserInfo(user) }
 			}()
-		} else {
-			s.RefreshToken(userInfo, Conf.DefaultTokenExpire)
-		}
 
-	case "on_play":
-		if streamInfo.Meta.PlaySubscribe {
-			if subscribed := func(account string) (b bool) {
-				if isOwner || account == "admin" {
-					return true
+			if userInfo, err := (<-uc)(); err != nil {
+				return 500, err.Error()
+			} else {
+				if userInfo.Token != token || userInfo.TokenExpire-time.Now().Unix() <= 0 {
+					return 401, "Unauthorized"
 				}
 
-				for _, u := range streamInfo.Users {
-					if account == u {
-						b = true
-						break
+				if e.Action == "on_publish" {
+					go func(meta StreamMeta) {
+						if meta.ClusterOrigin, err = jsoniter.Marshal(map[string]map[string]interface{}{
+							"query":  {"ip": e.Ip, "vhost": e.Vhost, "app": e.App, "stream": e.Stream},
+							"origin": {"ip": PodIp, "port": 1935, "vhost": e.Vhost},
+						}); err == nil {
+							s.UpdateStreamMetadata(key, meta)
+						}
+					}(streamInfo.Meta)
+				}
+
+				go s.RefreshToken(userInfo)
+			}
+		case "on_play":
+			if streamInfo.Meta.PlaySubscribe {
+				if subscribed := func() (b bool) {
+					if user == streamInfo.Owner || user == "admin" {
+						return true
 					}
+
+					for _, u := range streamInfo.Users {
+						if b = user == u; b {
+							break
+						}
+					}
+
+					return
+				}(); !subscribed {
+					return 403, "The stream must subscribed, otherwise don't play"
+				}
+			}
+
+			if streamInfo.Meta.PlaySecret {
+				if len(user) == 0 || len(token) == 0 {
+					return 401, "Unauthorized"
 				}
 
-				return
-			}(user); !subscribed {
-				errCode = 403
-				err = errors.New("The play stream must subscribed, otherwise don't play")
-				return
+				uc := make(chan func() (*UserInfo, error), 1)
+				defer close(uc)
+
+				go func() {
+					uc <- func() (*UserInfo, error) { return s.GetUserInfo(user) }
+				}()
+
+				if userInfo, err := (<-uc)(); err != nil {
+					return 500, err.Error()
+				} else {
+					if userInfo.Token != token || userInfo.TokenExpire-time.Now().Unix() <= 0 {
+						return 401, "Unauthorized"
+					}
+
+					go s.RefreshToken(userInfo)
+				}
 			}
 		}
 
-		if streamInfo.Meta.PlaySecret {
-			if len(user) == 0 || len(token) == 0 {
-				goto Error401
-			}
-
-			if userInfo, err = s.GetUserInfo(user); err != nil {
-				goto Error500
-			}
-			if s.CheckTokenExpire(userInfo) || userInfo.Token != token {
-				goto Error401
-			}
-
-			if !isOwner {
-				s.RefreshToken(userInfo, Conf.DefaultTokenExpire)
-			}
-		}
-
-		//originIp = jsoniter.Get(streamInfo.Meta.ClusterOrigin, "origin", "ip").ToString()
-	default:
-		err = errors.New(`Action '` + e.Action + `' fail`)
-		goto Error500
+		return 200, ""
 	}
-
-	return 200, nil
-
-Error401:
-	return 401, errors.New("Unauthorized")
-
-Error500:
-	return 500, err
 }
 
-func (s *RedisPool) GetUserInfo(account string) (result *UserInfo, err error) {
+func (s *RedisPool) GetUserInfo(account string) (*UserInfo, error) {
 	if users, err := s.GetUsers([]string{account}); err == nil && len(users) > 0 {
-		result = &users[0]
+		return &users[0], nil
 	} else {
-		result = &UserInfo{
-			Account: account,
-		}
+		return &UserInfo{Account: account}, nil
 	}
-
-	return
 }
 
-func (s *RedisPool) GetUsers(accounts []string) (result []UserInfo, err error) {
+func (s *RedisPool) GetUsers(accounts []string) ([]UserInfo, error) {
+	var err error
+
 	if accounts, err = s.getAllUserName(accounts); err != nil {
-		return
+		return nil, err
 	}
 
 	pool, err := s.getPool("")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
@@ -439,7 +423,8 @@ func (s *RedisPool) GetUsers(accounts []string) (result []UserInfo, err error) {
 
 	client.Flush()
 
-	//receive from redis
+	var result []UserInfo
+
 	for _, name := range accounts {
 		if v, err := redis.Bytes(client.Receive()); err == nil {
 			if body := jsoniter.Get(v); body.LastError() == nil {
@@ -454,41 +439,46 @@ func (s *RedisPool) GetUsers(accounts []string) (result []UserInfo, err error) {
 		}
 	}
 
-	return
+	return result, nil
 }
 
-func (s *RedisPool) AddUser(info *UserInfo) (err error) {
-	var user *UserInfo
+func (s *RedisPool) AddUser(info *UserInfo) (*UserInfo, error) {
+	var (
+		user *UserInfo
+		err  error
+	)
 
 	//check user exists
 	if user, err = s.GetUserInfo(info.Account); err != nil {
-		return
-	}
-	if user.Exists {
-		err = errors.New(`User '` + info.Account + `' already exists`)
-		return
+		return nil, err
 	}
 
-	info.Password = genUserPassword(info.Password)
+	if !user.Exists {
+		info.Password = genUserPassword(info.Password)
+		//return nil, errors.New(`User '` + info.Account + `' already exists`)
+	}
 
-	return s.RefreshToken(info, 0)
+	return s.RefreshToken(info)
 }
 
-func (s *RedisPool) DeleteUser(account string) (err error) {
-	var user *UserInfo
+func (s *RedisPool) DeleteUser(account string) error {
+	var (
+		user *UserInfo
+		err  error
+	)
 
 	//check user exists
 	if user, err = s.GetUserInfo(account); err != nil {
-		return
+		return err
 	}
+
 	if !user.Exists {
-		err = errors.New(`User '` + account + `' not exists`)
-		return
+		return errors.New(`User '` + account + `' not exists`)
 	}
 
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return err
 	}
 
 	client := pool.Get()
@@ -514,27 +504,29 @@ func (s *RedisPool) DeleteUser(account string) (err error) {
 		}
 	}
 
-	return
+	return nil
 }
 
-func (s *RedisPool) GetStreamInfo(stream string) (result *StreamInfo, err error) {
+func (s *RedisPool) GetStreamInfo(stream string) (*StreamInfo, error) {
 	if streams, err := s.GetStreams([]string{stream}); err == nil {
-		result = &streams[0]
+		return &streams[0], nil
+	} else {
+		return nil, err
 	}
-
-	return
 }
 
-func (s *RedisPool) GetStreams(streams []string) (result []StreamInfo, err error) {
+func (s *RedisPool) GetStreams(streams []string) ([]StreamInfo, error) {
+	var err error
+
 	if len(streams) == 0 {
 		if streams, err = s.getAllStreamName(); err != nil {
-			return
+			return nil, err
 		}
 	}
 
 	pool, err := s.getPool("")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
@@ -546,7 +538,7 @@ func (s *RedisPool) GetStreams(streams []string) (result []StreamInfo, err error
 
 	client.Flush()
 
-	result = make([]StreamInfo, len(streams))
+	result := make([]StreamInfo, len(streams))
 
 	//receive from redis
 	for j, key := range streams {
@@ -576,38 +568,40 @@ func (s *RedisPool) GetStreams(streams []string) (result []StreamInfo, err error
 		}
 	}
 
-	return
+	return result, nil
 }
 
-func (s *RedisPool) NewStream(key, owner string) (result *StreamInfo, err error) {
+func (s *RedisPool) NewStream(key, owner string) (*StreamInfo, error) {
 	if len(owner) == 0 {
-		err = errors.New("Owner must define")
-		return
+		return nil, errors.New("Owner must define")
 	}
+
+	var (
+		result *StreamInfo
+		user   *UserInfo
+		err    error
+	)
 
 	//check stream exists
 	if result, err = s.GetStreamInfo(key); err != nil {
-		return
-	}
-	if result.Exists {
-		err = errors.New(`Key '` + key + `' already exists`)
-		return
+		return nil, err
 	}
 
-	var user *UserInfo
+	if result.Exists {
+		return nil, errors.New(`Key '` + key + `' already exists`)
+	}
 
 	//check user exists
 	if user, err = s.GetUserInfo(owner); err != nil {
-		return
+		return nil, err
 	}
 	if !user.Exists {
-		err = errors.New(`Owner '` + owner + `' not exists`)
-		return
+		return nil, errors.New(`Owner '` + owner + `' not exists`)
 	}
 
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
@@ -618,26 +612,31 @@ func (s *RedisPool) NewStream(key, owner string) (result *StreamInfo, err error)
 		"owner", owner,
 		"metadata/play_secret", false,
 		"metadata/play_subscribe", false,
-	); err == nil {
-		result, err = s.GetStreamInfo(key)
+	); err != nil {
+		return nil, err
 	}
 
-	return
+	return s.GetStreamInfo(key)
 }
 
-func (s *RedisPool) SubscribeStream(key string, accounts []string) (result *StreamInfo, err error) {
+func (s *RedisPool) SubscribeStream(key string, accounts []string) (*StreamInfo, error) {
+	var (
+		result *StreamInfo
+		err    error
+	)
+
 	//check stream exists
 	if result, err = s.GetStreamInfo(key); err != nil {
-		return
+		return nil, err
 	}
+
 	if !result.Exists {
-		err = errors.New(`Key '` + key + `' not exists`)
-		return
+		return nil, errors.New(`Key '` + key + `' not exists`)
 	}
 
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
@@ -656,26 +655,29 @@ func (s *RedisPool) SubscribeStream(key string, accounts []string) (result *Stre
 				return nil, err
 			}
 		}
-
-		result, err = s.GetStreamInfo(key)
 	}
 
-	return
+	return s.GetStreamInfo(key)
 }
 
-func (s *RedisPool) UpdateStreamMetadata(key string, meta StreamMeta) (result *StreamInfo, err error) {
+func (s *RedisPool) UpdateStreamMetadata(key string, meta StreamMeta) (*StreamInfo, error) {
+	var (
+		result *StreamInfo
+		err    error
+	)
+
 	//check stream exists
 	if result, err = s.GetStreamInfo(key); err != nil {
-		return
+		return nil, err
 	}
+
 	if !result.Exists {
-		err = errors.New(`Key '` + key + `' not exists`)
-		return
+		return nil, errors.New(`Key '` + key + `' not exists`)
 	}
 
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
@@ -703,19 +705,24 @@ func (s *RedisPool) UpdateStreamMetadata(key string, meta StreamMeta) (result *S
 	return s.GetStreamInfo(key)
 }
 
-func (s *RedisPool) UnsubscribeStream(key string, accounts []string) (result *StreamInfo, err error) {
+func (s *RedisPool) UnsubscribeStream(key string, accounts []string) (*StreamInfo, error) {
+	var (
+		result *StreamInfo
+		err    error
+	)
+
 	//check stream exists
 	if result, err = s.GetStreamInfo(key); err != nil {
-		return
+		return nil, err
 	}
+
 	if !result.Exists {
-		err = errors.New(`Key '` + key + `' not exists`)
-		return
+		return nil, errors.New(`Key '` + key + `' not exists`)
 	}
 
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	client := pool.Get()
@@ -739,23 +746,23 @@ func (s *RedisPool) UnsubscribeStream(key string, accounts []string) (result *St
 				return nil, err
 			}
 		}
-
-		result, err = s.GetStreamInfo(key)
 	}
 
-	return
+	return s.GetStreamInfo(key)
 }
 
-func (s *RedisPool) DeleteStream(key string) (err error) {
+func (s *RedisPool) DeleteStream(key string) error {
 	pool, err := s.getPool("master")
 	if err != nil {
-		return
+		return err
 	}
 
 	client := pool.Get()
 	defer release(client)
 
-	_, err = client.Do("DEL", key)
+	if _, err := client.Do("DEL", key); err != nil {
+		return err
+	}
 
-	return
+	return nil
 }

@@ -39,7 +39,7 @@ spec:
                 name: sidecar-env
           env:
             - name: OSS_BACKUP_ENABLED
-              value: 'true'
+              value: 'false'
           volumeMounts:
             - name: conf
               mountPath: /app/conf
