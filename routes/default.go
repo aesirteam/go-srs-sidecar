@@ -26,7 +26,7 @@ func (a *DefaultRouter) Run(addr string) {
 	userGroup := engine.Group("/", basicAuth(false, &a.RedisPool))
 
 	engine.GET("/verify/:app/:stream", func(c *gin.Context) {
-		errCode, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
+		errCode, _, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
 			Action: "on_play",
 			Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 			App:    c.Param("app"),
@@ -40,7 +40,7 @@ func (a *DefaultRouter) Run(addr string) {
 	engine.Use(func(c *gin.Context) {
 		if strings.HasSuffix(c.Request.URL.Path, ".m3u8") || strings.HasSuffix(c.Request.URL.Path, ".ts") {
 			app, stream := filepath.Split(c.Request.URL.Path)
-			if errCode, errMsg := a.RedisPool.TokenAuth(&common.WebHookEvent{
+			if errCode, errMsg, _ := a.RedisPool.TokenAuth(&common.WebHookEvent{
 				Action: "on_play",
 				Vhost:  c.DefaultQuery("vhost", common.DEFAULT_VHOST),
 				App:    filepath.Base(app),

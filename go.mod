@@ -8,7 +8,6 @@ require (
 	github.com/fsnotify/fsnotify v1.4.9
 	github.com/gin-gonic/gin v1.6.3
 	github.com/gomodule/redigo v2.0.0+incompatible
-	github.com/google/uuid v1.1.1
 	github.com/json-iterator/go v1.1.10
 	github.com/minio/minio-go/v7 v7.0.5
 	k8s.io/apimachinery v0.19.4

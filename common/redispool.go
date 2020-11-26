@@ -52,6 +52,7 @@ type StreamDesc struct {
 type StreamMeta struct {
 	PlaySecret    bool
 	PlaySubscribe bool
+	HlsBackup     bool
 	ClusterOrigin []byte
 }
 
@@ -280,7 +281,7 @@ func (s *RedisPool) InitAdminUser() string {
 
 	return info.Password
 }
-func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
+func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string, *StreamInfo) {
 	var (
 		user, token string
 		key         = STREAM_PREFIX + e.Vhost + "/" + e.App + "/" + e.Stream
@@ -291,7 +292,7 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 	}
 
 	if query, err := url.ParseQuery(e.Param); err != nil {
-		return 500, err.Error()
+		return 500, err.Error(), nil
 	} else {
 		user, token = query.Get("u"), query.Get("t")
 	}
@@ -304,20 +305,20 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 	}()
 
 	if streamInfo, err := (<-sc)(); err != nil {
-		return 500, err.Error()
+		return 500, err.Error(), nil
 	} else {
 		if !streamInfo.Exists {
-			return 404, `Key "` + key + `" not exists`
+			return 404, `Key "` + key + `" not exists`, nil
 		}
 
 		switch e.Action {
 		case "on_publish", "on_hls":
 			if len(user) == 0 || len(token) == 0 {
-				return 401, "Unauthorized"
+				return 401, "Unauthorized", streamInfo
 			}
 
 			if !(user == streamInfo.Owner) {
-				return 403, "The stream owner not match"
+				return 403, "The stream owner not match", streamInfo
 			}
 
 			uc := make(chan func() (*UserInfo, error), 1)
@@ -328,10 +329,10 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 			}()
 
 			if userInfo, err := (<-uc)(); err != nil {
-				return 500, err.Error()
+				return 500, err.Error(), streamInfo
 			} else {
 				if userInfo.Token != token || userInfo.TokenExpire-time.Now().Unix() <= 0 {
-					return 401, "Unauthorized"
+					return 401, "Unauthorized", streamInfo
 				}
 
 				if e.Action == "on_publish" {
@@ -362,13 +363,13 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 
 					return
 				}(); !subscribed {
-					return 403, "The stream must subscribed, otherwise don't play"
+					return 403, "The stream must subscribed, otherwise don't play", streamInfo
 				}
 			}
 
 			if streamInfo.Meta.PlaySecret {
 				if len(user) == 0 || len(token) == 0 {
-					return 401, "Unauthorized"
+					return 401, "Unauthorized", streamInfo
 				}
 
 				uc := make(chan func() (*UserInfo, error), 1)
@@ -379,10 +380,10 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 				}()
 
 				if userInfo, err := (<-uc)(); err != nil {
-					return 500, err.Error()
+					return 500, err.Error(), streamInfo
 				} else {
 					if userInfo.Token != token || userInfo.TokenExpire-time.Now().Unix() <= 0 {
-						return 401, "Unauthorized"
+						return 401, "Unauthorized", streamInfo
 					}
 
 					go s.RefreshToken(userInfo)
@@ -390,7 +391,7 @@ func (s *RedisPool) TokenAuth(e *WebHookEvent) (int, string) {
 			}
 		}
 
-		return 200, ""
+		return 200, "", streamInfo
 	}
 }
 
@@ -557,6 +558,8 @@ func (s *RedisPool) GetStreams(streams []string) ([]StreamInfo, error) {
 					result[j].Meta.PlaySecret = arr[k+1].([]byte)[0] == 49
 				case "metadata/play_subscribe":
 					result[j].Meta.PlaySubscribe = arr[k+1].([]byte)[0] == 49
+				case "metadata/hls_backup":
+					result[j].Meta.HlsBackup = arr[k+1].([]byte)[0] == 49
 				case "metadata/cluster_origin":
 					result[j].Meta.ClusterOrigin = arr[k+1].([]byte)
 				case "owner":
@@ -688,6 +691,7 @@ func (s *RedisPool) UpdateStreamMetadata(key string, meta StreamMeta) (*StreamIn
 	client.Send("HMSET", key,
 		"metadata/play_secret", meta.PlaySecret,
 		"metadata/play_subscribe", meta.PlaySubscribe,
+		"metadata/hls_backup", meta.HlsBackup,
 	)
 	pipeLine++
 

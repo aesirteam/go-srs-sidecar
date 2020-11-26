@@ -130,5 +130,4 @@ type CustomConfig struct {
 
 	DefaultAdminPasswd string `env:"DEFAULT_ADMIN_PASSWORD"`
 	DefaultTokenExpire int64  `env:"DEFAULT_TOKEN_EXPIRE" envDefault:"60"`
-	OssBackupEnabled   bool   `env:"OSS_BACKUP_ENABLED"`
 }

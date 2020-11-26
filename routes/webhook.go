@@ -55,7 +55,7 @@ func (a *WebHookRouter) Run(addr string) {
 			return
 		}
 
-		if errCode, errMsg := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+		if errCode, errMsg, _ := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
 			c.AbortWithStatusJSON(errCode, gin.H{"err": errMsg})
 			return
 		}
@@ -72,22 +72,19 @@ func (a *WebHookRouter) Run(addr string) {
 		}
 
 		if common.IsLeader {
-			if errCode, errMsg := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+			if errCode, errMsg, streamInfo := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
 				klog.Error(errCode, ": ", errMsg)
-			}
+			} else {
+				if streamInfo.Meta.HlsBackup {
+					ch := make(chan error, 1)
+					defer close(ch)
 
-			if common.Conf.OssBackupEnabled {
-				ch := make(chan error)
+					go func() {
+						ch <- a.S3Client.FPutObject(hook.Url, common.Conf.SrsHlsPath+"/"+hook.Url)
+						//ch <- a.S3Client.FPutObject(hook.M3u8Url, common.Conf.SrsHlsPath + "/" + hook.M3u8Url)
+					}()
 
-				go func() {
-					ch <- a.S3Client.FPutObject(hook.Url, common.Conf.SrsHlsPath+"/"+hook.Url)
-					//ch <- a.S3Client.FPutObject(hook.M3u8Url, common.Conf.SrsHlsPath + "/" + hook.M3u8Url)
-				}()
-
-				select {
-				case err := <-ch:
-					close(ch)
-					if err != nil {
+					if err := <-ch; err != nil {
 						klog.Error(err)
 					}
 				}

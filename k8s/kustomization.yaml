@@ -33,8 +33,6 @@ configMapGenerator:
       - DEFAULT_ADMIN_PASSWORD=
       - DEFAULT_TOKEN_EXPIRE=60
 
-      - OSS_BACKUP_ENABLED=false
-
 generatorOptions:
   disableNameSuffixHash: true
 
