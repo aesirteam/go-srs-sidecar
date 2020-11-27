@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+type WatcherDaemon struct{}
+
 func removeExpireFile(root string, ttl int64) {
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if time.Now().Unix()-info.ModTime().Unix() >= ttl {
@@ -19,20 +21,17 @@ func removeExpireFile(root string, ttl int64) {
 	})
 }
 
-func NewWatcher() *LocalFileSystem {
-	return &LocalFileSystem{
-		CustomConfig: Conf,
-	}
+func NewWatcher() *WatcherDaemon {
+	return &WatcherDaemon{}
 }
 
-func (fs *LocalFileSystem) ConfigFile(user, password string) {
+func (fs *WatcherDaemon) ConfigFile(user, password string) {
 	reload := func() error {
-		transport := http.Transport{}
-		resp, err := transport.RoundTrip(&http.Request{
+		resp, err := (&http.Client{}).Do(&http.Request{
 			Method: "GET",
 			URL: &url.URL{
 				Scheme:   "http",
-				Host:     fs.SrsApiServer,
+				Host:     Conf.SrsApiServer,
 				Path:     "/api/v1/raw",
 				RawQuery: "rpc=reload&scope=configmap",
 			},
@@ -53,9 +52,9 @@ func (fs *LocalFileSystem) ConfigFile(user, password string) {
 	_ = reload()
 
 	if watcher, err := fsnotify.NewWatcher(); err == nil {
-		defer watcher.Close()
+		defer func() { _ = watcher.Close() }()
 
-		path := fs.SrsCfgFile
+		path := Conf.SrsCfgFile
 
 		if path, err = filepath.Abs(path); err != nil {
 			klog.Warning("ConfigFileWatcher: ", err.Error())
@@ -92,13 +91,13 @@ func (fs *LocalFileSystem) ConfigFile(user, password string) {
 	}
 }
 
-func (fs *LocalFileSystem) MediaFile(root string) {
+func (fs *WatcherDaemon) MediaFile(root string) {
 	if len(root) == 0 {
-		root = fs.SrsHlsPath
+		root = Conf.SrsHlsPath
 	}
 
 	if watcher, err := fsnotify.NewWatcher(); err == nil {
-		defer watcher.Close()
+		defer func() { _ = watcher.Close() }()
 
 		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if info.IsDir() {
@@ -128,7 +127,7 @@ func (fs *LocalFileSystem) MediaFile(root string) {
 						}
 					}
 					if event.Op&fsnotify.CloseWrite == fsnotify.CloseWrite {
-						removeExpireFile(filepath.Dir(event.Name), fs.SrsHlsExpire)
+						removeExpireFile(filepath.Dir(event.Name), Conf.SrsHlsExpire)
 					}
 				case err, ok := <-watcher.Errors:
 					if !ok {

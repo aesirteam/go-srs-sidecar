@@ -31,15 +31,15 @@ func (a *WebHookRouter) Run(addr string) {
 
 	engine.Use(func(c *gin.Context) {
 		if ext := filepath.Ext(c.Request.URL.Path); ext == ".m3u8" || ext == ".ts" {
-			fs := common.LocalFileSystem{}
+			fs := common.LocalFileSystem{Path: common.Conf.SrsHlsPath + c.Request.URL.Path}
 
-			if err := fs.Open(common.Conf.SrsHlsPath + c.Request.URL.Path); err != nil {
+			if _, err := fs.Open(); err != nil {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
 			}
 			defer fs.Close()
 
-			c.Writer.Header().Set("Content-Type", "apication/vnd.apple.mpegurl")
+			//c.Writer.Header().Set("Content-Type", "apication/vnd.apple.mpegurl")
 			c.Writer.WriteHeader(http.StatusOK)
 			_, _ = fs.WriteTo(c.Writer)
 

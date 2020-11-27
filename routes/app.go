@@ -4,16 +4,28 @@ import (
 	"github.com/aesirteam/go-srs-sidecar/common"
 	"github.com/gin-gonic/gin"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
-	engine   = gin.New()
-	regexpTs = regexp.MustCompile(`.ts`)
-	regexpFn = regexp.MustCompile(`^(\w+)`)
+	engine    = gin.New()
+	regexpTs  = regexp.MustCompile(`.ts`)
+	regexpFn  = regexp.MustCompile(`^(\w+)`)
+	transport = &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		//MaxIdleConns:        	0,
+		//MaxConnsPerHost:		0,
+		MaxIdleConnsPerHost: 512,
+		IdleConnTimeout:     30 * time.Second,
+	}
 )
 
 type App interface {
@@ -61,14 +73,14 @@ func basicAuth(isAdmin bool, redisPool *common.RedisPool) gin.HandlerFunc {
 }
 
 func writeHandlerFunc(c *gin.Context) {
-	transformFile := func(path string, fs common.FileSystem) {
-		if err := fs.Open(path); err != nil {
+	transformFile := func(fs common.FileSystem) {
+		path, err := fs.Open()
+		if err != nil {
 			return
 		}
 		defer fs.Close()
 
 		var (
-			err     error
 			readLen int
 			buf     = make([]byte, 4096)
 		)
@@ -92,6 +104,7 @@ func writeHandlerFunc(c *gin.Context) {
 					_, err = c.Writer.Write(regexpTs.ReplaceAll(buf[:readLen], []byte(".ts?"+c.Request.URL.RawQuery)))
 				}
 			} else if strings.HasSuffix(path, ".ts") {
+				c.Writer.Header().Set("Content-Type", "video/MP2T")
 				_, err = c.Writer.Write(buf[:readLen])
 				if t, ok := fs.(*common.HttpFileSystem); ok {
 					_, err = t.Write(buf[:readLen])
@@ -110,15 +123,18 @@ func writeHandlerFunc(c *gin.Context) {
 			c.Request.Header.Set("proxyMode", "")
 			return host
 		} else {
+			c.Request.Host = host[:idx]
 			c.Request.Header.Set("proxyMode", host[idx+1:])
-			return host[:idx]
+			return c.Request.Host
 		}
 	}(c.GetString("proxyHost"))
 
 	path := common.Conf.SrsHlsPath + c.Request.URL.Path
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		transformFile(path, &common.HttpFileSystem{Req: c.Request})
+		transformFile(&common.HttpFileSystem{Path: path, Client: func() (*http.Response, error) {
+			return transport.RoundTrip(c.Request)
+		}})
 	} else {
 		if c.Request.Header.Get("proxyMode") == "remote" {
 
@@ -129,9 +145,10 @@ func writeHandlerFunc(c *gin.Context) {
 				ch <- func() (int, error) {
 					c.Request.URL.Path = "/verify" + c.Request.URL.Path
 
-					transport := http.Transport{}
-
 					resp, err := transport.RoundTrip(c.Request)
+					if err != nil || resp == nil {
+						return 500, err
+					}
 					defer resp.Body.Close()
 
 					return resp.StatusCode, err
@@ -147,21 +164,21 @@ func writeHandlerFunc(c *gin.Context) {
 			}
 		}
 
-		transformFile(path, &common.LocalFileSystem{})
+		transformFile(&common.LocalFileSystem{Path: path})
 	}
 }
 
 func writeConfigMapFunc(c *gin.Context) {
-	fs := common.LocalFileSystem{}
+	fs := common.LocalFileSystem{Path: common.Conf.SrsCfgFile}
 
-	if err := fs.Open(common.Conf.SrsCfgFile); err != nil {
+	if _, err := fs.Open(); err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
 	defer fs.Close()
 
-	c.Writer.Header().Set("Content-Type", "application/octet-stream")
+	///c.Writer.Header().Set("Content-Type", "application/octet-stream")
 	c.Writer.WriteHeader(http.StatusOK)
 	_, _ = fs.WriteTo(c.Writer)
 }

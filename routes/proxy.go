@@ -18,7 +18,7 @@ func (a *ProxyRouter) Run(addr string) {
 
 	engine.Use(func(c *gin.Context) {
 		if strings.HasSuffix(c.Request.URL.Path, ".m3u8") || strings.HasSuffix(c.Request.URL.Path, ".ts") {
-			c.Set("proxyHost", watcher.SrsProxyHost+";remote")
+			c.Set("proxyHost", common.Conf.SrsProxyHost+";remote")
 		} else {
 			c.Abort()
 		}

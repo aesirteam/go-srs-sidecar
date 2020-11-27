@@ -11,89 +11,83 @@ import (
 )
 
 type FileSystem interface {
-	Open(path string) error
-	Read(p []byte) (int, error)
-	Write(p []byte) (int, error)
+	Open() (string, error)
+	Read(buf []byte) (int, error)
 	Close() error
 }
 
 type LocalFileSystem struct {
-	handler *os.File
-	*bufio.Reader
+	Path string
 
-	CustomConfig
+	handler *os.File
+	reader  *bufio.Reader
 }
 
 type HttpFileSystem struct {
-	Req  *http.Request
-	Resp *http.Response
+	Path   string
+	Client func() (*http.Response, error)
 
 	handler *os.File
-	*bufio.Reader
-	*bufio.Writer
-
-	CustomConfig
+	reader  io.ReadCloser
+	writer  *bufio.Writer
 }
 
-func (fs *LocalFileSystem) Open(path string) (err error) {
+func (fs *LocalFileSystem) Open() (path string, err error) {
+	path = fs.Path
 	if fs.handler, err = os.Open(path); err == nil {
-		fs.Reader = bufio.NewReader(fs.handler)
+		fs.reader = bufio.NewReader(fs.handler)
 	}
 	return
 }
 
-func (fs *LocalFileSystem) Read(p []byte) (int, error) {
-	return fs.Reader.Read(p)
-}
-
-func (fs *LocalFileSystem) Write(p []byte) (int, error) {
-	_ = p
-	return 0, nil
+func (fs *LocalFileSystem) Read(buf []byte) (int, error) {
+	return fs.reader.Read(buf)
 }
 
 func (fs *LocalFileSystem) WriteTo(w io.Writer) (int64, error) {
-	return fs.Reader.WriteTo(w)
+	return fs.reader.WriteTo(w)
 }
 
 func (fs *LocalFileSystem) Close() error {
 	return ioutil.NopCloser(fs.handler).Close()
 }
 
-func (fs *HttpFileSystem) Open(path string) (err error) {
+func (fs *HttpFileSystem) Open() (path string, err error) {
+	path = fs.Path
 	if strings.HasSuffix(path, ".ts") {
 		_ = os.MkdirAll(filepath.Dir(path), 0755)
 
 		if fs.handler, err = os.Create(path); err == nil {
-			fs.Writer = bufio.NewWriter(fs.handler)
+			fs.writer = bufio.NewWriter(fs.handler)
 		}
 	}
 
-	transport := http.Transport{}
-	if fs.Resp, err = transport.RoundTrip(fs.Req); err == nil {
-		fs.Reader = bufio.NewReader(fs.Resp.Body)
+	if resp, err := fs.Client(); err == nil {
+		fs.reader = resp.Body
 	}
 
 	return
 }
 
-func (fs *HttpFileSystem) Read(p []byte) (int, error) {
-	return fs.Reader.Read(p)
+func (fs *HttpFileSystem) Read(buf []byte) (int, error) {
+	return fs.reader.Read(buf)
 }
 
-func (fs *HttpFileSystem) Write(p []byte) (nn int, err error) {
-	if fs.Writer == nil {
-		return
+func (fs *HttpFileSystem) Write(data []byte) (nn int, err error) {
+	if fs.writer != nil {
+		return fs.writer.Write(data)
 	}
-	return fs.Writer.Write(p)
+
+	return
 }
 
 func (fs *HttpFileSystem) Close() error {
-	if fs.Writer != nil {
-		_ = fs.Writer.Flush()
+	if fs.writer != nil {
+		_ = fs.writer.Flush()
 	}
 	if fs.handler != nil {
 		_ = fs.handler.Close()
 	}
 
-	return fs.Resp.Body.Close()
+	return fs.reader.Close()
 }
