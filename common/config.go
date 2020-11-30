@@ -29,37 +29,48 @@ var (
 )
 
 func init() {
-	if err := env.Parse(&Conf); err != nil {
-		klog.Fatal(err)
-		os.Exit(0)
-	}
+	done := make(chan bool)
+	defer close(done)
 
-	Hostname, _ = os.Hostname()
-
-	ch := make(chan string, 2)
 	go func() {
-		ch <- execCommand("hostname", "-i")
-		ch <- execCommand("cat", "/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		var err error
+
+		if err = env.Parse(&Conf); err != nil {
+			klog.Fatal(err)
+		}
+
+		if Hostname, err = os.Hostname(); err != nil {
+			klog.Fatal(err)
+		}
+
+		if PodIp, err = execCommand("hostname", "-i"); err != nil {
+			klog.Fatal(err)
+		}
+
+		if Namespace, err = execCommand("cat", "/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err != nil {
+			klog.Warning(err)
+		}
+
+		done <- true
 	}()
 
 	select {
-	case PodIp = <-ch:
-		Namespace = <-ch
-		close(ch)
+	case <-done:
+		//klog.Info("PodIp: ", PodIp)
+		//klog.Info("Hostname: ", Hostname)
+		//klog.Info("Namespace: ", Namespace)
 	}
-
-	//klog.Info(PodIp, " ", Hostname, " ", Namespace)
 }
 
-func execCommand(name string, arg ...string) (result string) {
+func execCommand(name string, arg ...string) (string, error) {
 	cmd := exec.Command(name, arg...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	if err := cmd.Run(); err == nil {
-		result = strings.TrimSpace(out.String())
+	if err := cmd.Run(); err != nil {
+		return "", err
 	}
 
-	return
+	return strings.TrimSpace(out.String()), nil
 }
 
 func genHeaderAuthorization(user, password string) string {
@@ -106,13 +117,14 @@ func ParseHeaderAuthorization(val string) (user string, password string) {
 }
 
 type CustomConfig struct {
-	SentinelHost string `env:"redis_sentinel_host" envDefault:"127.0.0.1"`
-	SentinelPort int    `env:"redis_sentinel_port" envDefault:"26379"`
-	MasterName   string `env:"redis_name" envDefault:"mymaster"`
-	Password     string `env:"redis_pass"`
-	Database     int    `env:"redis_database"`
-	MaxIdle      int    `env:"redis_pool_min" envDefault:"3"`
-	MaxActive    int    `env:"redis_pool_max" envDefault:"10"`
+	RedisMode      string `env:"redis_mode" envDefault:"Standalone"`
+	RedislHost     string `env:"redis_host" envDefault:"127.0.0.1"`
+	RedisPort      int    `env:"redis_port" envDefault:"6379"`
+	RedisMaster    string `env:"redis_master" envDefault:"mymaster"`
+	RedisPassword  string `env:"redis_pass"`
+	RedisDatabase  int    `env:"redis_database"`
+	RedisMaxIdle   int    `env:"redis_pool_min" envDefault:"3"`
+	RedisMaxActive int    `env:"redis_pool_max" envDefault:"10"`
 
 	Endpoint        string `env:"minio_endpoint" envDefault:"play.min.io"`
 	Port            int    `env:"minio_port" envDefault:"80"`

@@ -168,7 +168,7 @@ func (a *DefaultRouter) Run(addr string) {
 		var (
 			postData struct {
 				Owner    string            `json:"owner"`
-				Metadata common.StreamMeta `json:"metadata"`
+				Metadata common.StreamMeta `json:"meta"`
 				Users    []string          `json:"users"`
 			}
 			err    error

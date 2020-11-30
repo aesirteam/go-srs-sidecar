@@ -144,7 +144,6 @@ func writeHandlerFunc(c *gin.Context) {
 			go func() {
 				ch <- func() (int, error) {
 					c.Request.URL.Path = "/verify" + c.Request.URL.Path
-
 					resp, err := transport.RoundTrip(c.Request)
 					if err != nil || resp == nil {
 						return 500, err

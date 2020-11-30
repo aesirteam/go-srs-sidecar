@@ -71,22 +71,20 @@ func (a *WebHookRouter) Run(addr string) {
 			return
 		}
 
-		if common.IsLeader {
-			if errCode, errMsg, streamInfo := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
-				klog.Error(errCode, ": ", errMsg)
-			} else {
-				if streamInfo.Meta.HlsBackup {
-					ch := make(chan error, 1)
-					defer close(ch)
+		if errCode, errMsg, streamInfo := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+			klog.Error(errCode, ": ", errMsg)
+		} else if streamInfo.Meta.HlsBackup {
+			if common.IsLeader {
+				ch := make(chan error, 1)
+				defer close(ch)
 
-					go func() {
-						ch <- a.S3Client.FPutObject(hook.Url, common.Conf.SrsHlsPath+"/"+hook.Url)
-						//ch <- a.S3Client.FPutObject(hook.M3u8Url, common.Conf.SrsHlsPath + "/" + hook.M3u8Url)
-					}()
+				go func() {
+					ch <- a.S3Client.FPutObject(hook.Url, common.Conf.SrsHlsPath+"/"+hook.Url)
+					//ch <- a.S3Client.FPutObject(hook.M3u8Url, common.Conf.SrsHlsPath + "/" + hook.M3u8Url)
+				}()
 
-					if err := <-ch; err != nil {
-						klog.Error(err)
-					}
+				if err := <-ch; err != nil {
+					klog.Error(err)
 				}
 			}
 		}

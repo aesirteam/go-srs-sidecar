@@ -8,9 +8,9 @@ bases:
 configMapGenerator:
   - name: sidecar-env
     literals:
-      - redis_sentinel_host=127.0.0.1
-      - redis_sentinel_port=26379
-      - redis_name=mymaster
+      - redis_host=127.0.0.1
+      - redis_port=6379
+      - redis_master=mymaster
       - redis_pass=
       - redis_database=0
       - redis_pool_min=3

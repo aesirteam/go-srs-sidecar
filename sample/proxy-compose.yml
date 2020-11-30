@@ -1,0 +1,23 @@
+version: "3"
+
+services:
+  proxy:
+    image: hub.bigdatagz.com/ossrs/srs:v4.0
+    restart: always
+    ports:
+      - 19351:1935
+
+  proxy-sidecar:
+    image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
+    restart: always
+    environment:
+      - SRS_API_SERVER=proxy:1985
+      - SRS_PROXY_HOST=192.168.1.150:8080
+    volumes:
+      - ./conf/proxy.conf:/app/conf/srs.conf
+    ports:
+      - 8082:8080
+    command:
+      - proxy
+    depends_on:
+      - proxy

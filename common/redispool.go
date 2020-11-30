@@ -62,62 +62,57 @@ var (
 
 func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 	s.once.Do(func() {
-		sntnl := &sentinel.Sentinel{
-			Addrs:      []string{Conf.SentinelHost + ":" + strconv.Itoa(Conf.SentinelPort)},
-			MasterName: Conf.MasterName,
-			Dial: func(addr string) (redis.Conn, error) {
-				c, err := redis.Dial("tcp", addr)
-				if err != nil {
-					klog.Fatal(err)
-					return nil, err
-				}
-				return c, nil
-			},
-		}
+		dialDatabase, dialPassword := redis.DialDatabase(Conf.RedisDatabase), redis.DialPassword(Conf.RedisPassword)
 
-		dialDatabase, dialPassword := redis.DialDatabase(Conf.Database), redis.DialPassword(Conf.Password)
-		//init master pool
-		masterAddr, err := sntnl.MasterAddr()
-		if err != nil {
-			klog.Fatal(err)
-			return
-		}
-
-		pool = append(pool, &redis.Pool{
-			MaxIdle:     Conf.MaxIdle,
-			MaxActive:   Conf.MaxActive,
-			IdleTimeout: 240 * time.Second,
-			Wait:        true,
-			Dial: func() (redis.Conn, error) {
-				c, err := redis.Dial("tcp", masterAddr, dialDatabase, dialPassword)
-				if err != nil {
-					klog.Fatal(err)
-					return nil, err
-				}
-				return c, nil
-			},
-			TestOnBorrow: func(c redis.Conn, t time.Time) (err error) {
-				if time.Since(t) < time.Minute {
-					return
-				}
-				if _, err := c.Do("PING"); err != nil {
-					klog.Fatal(err)
-				}
-				return err
-			},
-		})
-
-		//init slaves pool
-		slaveAddrs, err := sntnl.SlaveAddrs()
-		if err != nil {
-			klog.Fatal(err)
-			return
-		}
-
-		for _, addr := range slaveAddrs {
+		switch Conf.RedisMode {
+		case "Standalone":
 			pool = append(pool, &redis.Pool{
-				MaxIdle:     Conf.MaxIdle,
-				MaxActive:   Conf.MaxActive,
+				MaxIdle:     Conf.RedisMaxIdle,
+				MaxActive:   Conf.RedisMaxActive,
+				IdleTimeout: 240 * time.Second,
+				Wait:        true,
+				Dial: func() (redis.Conn, error) {
+					c, err := redis.Dial("tcp", Conf.RedislHost+":"+strconv.Itoa(Conf.RedisPort), dialDatabase, dialPassword)
+					if err != nil {
+						klog.Fatal(err)
+						return nil, err
+					}
+					return c, nil
+				},
+				TestOnBorrow: func(c redis.Conn, t time.Time) (err error) {
+					if time.Since(t) < time.Minute {
+						return
+					}
+					if _, err := c.Do("PING"); err != nil {
+						klog.Fatal(err)
+					}
+					return err
+				},
+			})
+
+		case "Sentinel":
+			sntnl := &sentinel.Sentinel{
+				Addrs:      []string{Conf.RedislHost + ":" + strconv.Itoa(Conf.RedisPort)},
+				MasterName: Conf.RedisMaster,
+				Dial: func(addr string) (redis.Conn, error) {
+					c, err := redis.Dial("tcp", addr)
+					if err != nil {
+						klog.Fatal(err)
+						return nil, err
+					}
+					return c, nil
+				},
+			}
+
+			//init master pool
+			addr, err := sntnl.MasterAddr()
+			if err != nil {
+				klog.Fatal(err)
+			}
+
+			pool = append(pool, &redis.Pool{
+				MaxIdle:     Conf.RedisMaxIdle,
+				MaxActive:   Conf.RedisMaxActive,
 				IdleTimeout: 240 * time.Second,
 				Wait:        true,
 				Dial: func() (redis.Conn, error) {
@@ -138,11 +133,46 @@ func (s *RedisPool) getPool(role string) (*redis.Pool, error) {
 					return err
 				},
 			})
+
+			//init slaves pool
+			slaves, err := sntnl.SlaveAddrs()
+			if err != nil {
+				klog.Fatal(err)
+			}
+
+			for _, addr := range slaves {
+				pool = append(pool, &redis.Pool{
+					MaxIdle:     Conf.RedisMaxIdle,
+					MaxActive:   Conf.RedisMaxActive,
+					IdleTimeout: 240 * time.Second,
+					Wait:        true,
+					Dial: func() (redis.Conn, error) {
+						c, err := redis.Dial("tcp", addr, dialDatabase, dialPassword)
+						if err != nil {
+							klog.Fatal(err)
+							return nil, err
+						}
+						return c, nil
+					},
+					TestOnBorrow: func(c redis.Conn, t time.Time) (err error) {
+						if time.Since(t) < time.Minute {
+							return
+						}
+						if _, err := c.Do("PING"); err != nil {
+							klog.Fatal(err)
+						}
+						return err
+					},
+				})
+			}
+
+		default:
+			klog.Fatal("Redis only support Standalone/Sentinel mode")
 		}
 	})
 
-	if len(role) == 0 {
-		role = "slave"
+	if Conf.RedisMode == "Standalone" {
+		role = "master"
 	}
 
 	if role == "master" {
