@@ -37,16 +37,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: sidecar-env
-          env:
-            - name: OSS_BACKUP_ENABLED
-              value: 'false'
           volumeMounts:
             - name: conf
               mountPath: /app/conf
             - name: hls
               mountPath: /app/public
           args:
-            - webhook
+            - --mode
+            - origin
+            - --leader-election
       restartPolicy: Always
       hostAliases:
         - ip: 10.204.62.33

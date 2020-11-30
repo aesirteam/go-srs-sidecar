@@ -2,11 +2,13 @@ package common
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -64,6 +66,9 @@ func (fs *HttpFileSystem) Open() (path string, err error) {
 
 	if resp, err := fs.Client(); err == nil {
 		fs.reader = resp.Body
+		if resp.StatusCode != http.StatusOK {
+			return path, errors.New(strconv.Itoa(resp.StatusCode))
+		}
 	}
 
 	return
@@ -88,6 +93,9 @@ func (fs *HttpFileSystem) Close() error {
 	if fs.handler != nil {
 		_ = fs.handler.Close()
 	}
+	//if fs.reader != nil {
+	//	return fs.reader.Close()
+	//}
 
 	return fs.reader.Close()
 }

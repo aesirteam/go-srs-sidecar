@@ -12,7 +12,7 @@ services:
     restart: always
     environment:
       - SRS_API_SERVER=proxy:1985
-      - SRS_PROXY_HOST=192.168.1.150:8080
+      - SRS_PROXY_HOST=live.bigdatagz.com
     volumes:
       - ./conf/proxy.conf:/app/conf/srs.conf
     ports:

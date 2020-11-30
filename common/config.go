@@ -22,10 +22,11 @@ const (
 var (
 	Conf CustomConfig
 
-	PodIp     string
-	Hostname  string
-	Namespace string
-	IsLeader  bool
+	PodIp          string
+	Hostname       string
+	Namespace      string
+	LeaderElection bool
+	IsLeader       bool
 )
 
 func init() {
@@ -106,8 +107,8 @@ func encodeUserToken(user, password string) string {
 func ParseHeaderAuthorization(val string) (user string, password string) {
 	if len(val) > 0 {
 		if authorization := strings.Split(val, " "); len(authorization) > 1 {
-			if bytes, err := base64.StdEncoding.DecodeString(authorization[1]); err == nil {
-				auth := strings.Split(string(bytes), ":")
+			if bs, err := base64.StdEncoding.DecodeString(authorization[1]); err == nil {
+				auth := strings.Split(string(bs), ":")
 				user, password = auth[0], auth[1]
 			}
 		}
@@ -134,12 +135,13 @@ type CustomConfig struct {
 	BucketName      string `env:"minio_bucketName"`
 	BucketPrefix    string `env:"minio_bucketPrefix"`
 
-	SrsApiServer string `env:"SRS_API_SERVER" envDefault:"127.0.0.1:1985"`
-	SrsCfgFile   string `env:"SRS_CONF_FILE" envDefault:"./conf/srs.conf"`
-	SrsHlsPath   string `env:"SRS_HLS_PATH" envDefault:"./public"`
-	SrsHlsExpire int64  `env:"SRS_HLS_EXPIRE" envDefault:"60"`
-	SrsProxyHost string `env:"SRS_PROXY_HOST" envDefault:"127.0.0.1:8080"`
-
 	DefaultAdminPasswd string `env:"DEFAULT_ADMIN_PASSWORD"`
-	DefaultTokenExpire int64  `env:"DEFAULT_TOKEN_EXPIRE" envDefault:"60"`
+
+	SrsApiServer string
+	SrsCfgFile   string
+	SrsHlsPath   string
+	SrsProxyHost string
+	SrsHlsExpire int64
+
+	DefaultTokenExpire int64
 }

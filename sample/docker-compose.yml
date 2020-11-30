@@ -12,20 +12,17 @@ services:
   origin-sidecar:
     image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
     restart: always
-    environment:
-      - redis_host=redis
-      - redis_port=6379
-      - redis_pass=redispassword
-
-      - DEFAULT_ADMIN_PASSWORD=defaultpassword
-
-      - SRS_API_SERVER=origin:1985
+    env_file:
+      - sidecar-env
     volumes:
       - ./conf/origin.conf:/app/conf/srs.conf
     networks:
       - overlay
     command:
-      - webhook
+      - --mode
+      - origin
+      - --srs-api-server
+      - origin:1985
     depends_on:
       - origin
       - redis
@@ -41,23 +38,20 @@ services:
   backup-sidecar:
     image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
     restart: always
-    environment:
-      - redis_host=redis
-      - redis_port=6379
-      - redis_pass=redispassword
-
-      - DEFAULT_ADMIN_PASSWORD=defaultpassword
-
-      - SRS_API_SERVER=backup:1985
+    env_file:
+      - sidecar-env
     volumes:
       - ./conf/backup.conf:/app/conf/srs.conf
       - hls-data:/app/public
     networks:
       - overlay
     command:
-      - webhook
-    depends_on:
+      - --mode
       - origin
+      - --srs-api-server
+      - backup:1985
+    depends_on:
+      - backup
       - redis
 
   edge:
@@ -71,19 +65,17 @@ services:
   edge-sidecar:
     image: hub.bigdatagz.com/ossrs/srs-sidecar:latest
     restart: always
-    environment:
-      - redis_host=redis
-      - redis_port=6379
-      - redis_pass=redispassword
-
-      - DEFAULT_ADMIN_PASSWORD=defaultpassword
-
-      - SRS_API_SERVER=edge:1985
-      - SRS_PROXY_HOST=backup-sidecar:8080
+    env_file:
+      - sidecar-env
     volumes:
       - ./conf/edge.conf:/app/conf/srs.conf
     networks:
       - overlay
+    command:
+      - --srs-api-server
+      - edge:1985
+      - --srs-proxy-server
+      - backup-sidecar:8080
     ports:
       - 8080:8080
     depends_on:
@@ -93,8 +85,8 @@ services:
   redis:
     image: hub.bigdatagz.com/library/redis:5.0-alpine
     restart: always
-    environment:
-      - redis_pass=redispassword
+    env_file:
+      - sidecar-env
     volumes:
     - ./dump.rdb:/data/dump.rdb
     networks:

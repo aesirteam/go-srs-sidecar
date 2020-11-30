@@ -23,8 +23,10 @@ func (a *WebHookRouter) Run(addr string) {
 	go watcher.ConfigFile("admin", password)
 
 	//start oss backup
-	leaseName := regexpFn.FindString(common.Hostname) + "-leader"
-	go common.LeaderElectionRunOrDie(leaseName)
+	if common.LeaderElection {
+		leaseName := regexpFn.FindString(common.Hostname) + "-leader"
+		go common.LeaderElectionRunOrDie(leaseName)
+	}
 
 	apiGroup := engine.Group("/api/v1")
 	userGroup := engine.Group("/", basicAuth(false, &a.RedisPool))
@@ -71,10 +73,10 @@ func (a *WebHookRouter) Run(addr string) {
 			return
 		}
 
-		if errCode, errMsg, streamInfo := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
-			klog.Error(errCode, ": ", errMsg)
-		} else if streamInfo.Meta.HlsBackup {
-			if common.IsLeader {
+		if common.IsLeader {
+			if errCode, errMsg, streamInfo := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+				klog.Error(errCode, ": ", errMsg)
+			} else if streamInfo.Meta.HlsBackup {
 				ch := make(chan error, 1)
 				defer close(ch)
 
@@ -87,8 +89,15 @@ func (a *WebHookRouter) Run(addr string) {
 					klog.Error(err)
 				}
 			}
+
+			goto done
 		}
 
+		if errCode, errMsg, _ := a.RedisPool.TokenAuth(&hook); errCode != http.StatusOK {
+			klog.Error(errCode, ": ", errMsg)
+		}
+
+	done:
 		c.AbortWithStatusJSON(http.StatusOK, gin.H{"code": 0})
 	})
 

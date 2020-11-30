@@ -24,14 +24,7 @@ configMapGenerator:
       - minio_bucketName=
       - minio_bucketPrefix=
 
-      - SRS_API_SERVER=127.0.0.1:1985
-      - SRS_CONF_FILE=./conf/srs.conf
-      - SRS_HLS_PATH=./public
-      - SRS_HLS_EXPIRE=60
-      - SRS_PROXY_HOST=127.0.0.1:8080
-
       - DEFAULT_ADMIN_PASSWORD=
-      - DEFAULT_TOKEN_EXPIRE=60
 
 generatorOptions:
   disableNameSuffixHash: true

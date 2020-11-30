@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -76,6 +77,9 @@ func writeHandlerFunc(c *gin.Context) {
 	transformFile := func(fs common.FileSystem) {
 		path, err := fs.Open()
 		if err != nil {
+			if statusCode, err := strconv.Atoi(err.Error()); err == nil {
+				c.AbortWithStatus(statusCode)
+			}
 			return
 		}
 		defer fs.Close()

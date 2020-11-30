@@ -32,12 +32,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: sidecar-env
-          env:
-            - name: SRS_PROXY_HOST
-              value: backup-svc.srs-cluster.svc.prod.dict.gz.cmcc:8080
           volumeMounts:
             - name: conf
               mountPath: /app/conf
+          args:
+            - --srs-proxy-server
+            - backup-svc.srs-cluster.svc.prod.dict.gz.cmcc:8080
       restartPolicy: Always
   strategy:
     type: RollingUpdate
