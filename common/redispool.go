@@ -485,7 +485,9 @@ func (s *RedisPool) AddUser(info *UserInfo) (*UserInfo, error) {
 	}
 
 	if !user.Exists {
-		info.Password = genUserPassword(info.Password)
+		if len(info.Password) == 0 {
+			info.Password = randString(16)
+		}
 		//return nil, errors.New(`User '` + info.Account + `' already exists`)
 	}
 

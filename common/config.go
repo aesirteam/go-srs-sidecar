@@ -3,18 +3,19 @@ package common
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"github.com/caarlos0/env/v6"
+	"io"
 	"k8s.io/klog"
-	"math/rand"
 	"os"
 	"os/exec"
 	"strings"
 )
 
 const (
-	LETTER_BYTES  = "ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghijklmnpqrstuvwxyz123456789"
 	STREAM_PREFIX = "stream:"
 	DEFAULT_VHOST = "__defaultVhost__"
 )
@@ -27,6 +28,7 @@ var (
 	Namespace      string
 	LeaderElection bool
 	IsLeader       bool
+	encoding       = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567")
 )
 
 func init() {
@@ -63,6 +65,16 @@ func init() {
 	}
 }
 
+func randString(len int) string {
+	buff := make([]byte, len)
+	if _, err := io.ReadFull(rand.Reader, buff); err != nil {
+		klog.Fatal(err)
+	}
+
+	str := string(buff[0]%26+'a') + strings.TrimRight(encoding.EncodeToString(buff[1:]), "=")
+	return str[:len]
+}
+
 func execCommand(name string, arg ...string) (string, error) {
 	cmd := exec.Command(name, arg...)
 	var out bytes.Buffer
@@ -78,27 +90,8 @@ func genHeaderAuthorization(user, password string) string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
 }
 
-func genUserPassword(password string) string {
-	if len(password) == 0 {
-		b := make([]byte, 16)
-		for i := range b {
-			b[i] = LETTER_BYTES[rand.Intn(len(LETTER_BYTES))]
-		}
-		return string(b)
-	}
-
-	return password
-}
-
 func encodeUserToken(user, password string) string {
-	nonce := func() string {
-		b := make([]byte, 8)
-		for i := range b {
-			b[i] = LETTER_BYTES[rand.Intn(len(LETTER_BYTES))]
-		}
-		return strings.ToLower(string(b))
-	}()
-
+	nonce := randString(8)
 	h := md5.New()
 	h.Write([]byte(user + ":" + password + "@" + nonce))
 	return hex.EncodeToString(h.Sum(nil)) + nonce
